@@ -503,9 +503,10 @@ function starterState(){ const s=emptyState(); const G=s.grids;
   s.bars={0:'yeah',4:'flow',8:'on',12:'beat'}; [0,4,8,12].forEach(x=>G.bars[0][x]=true);
   return s; }
 /* 🎲 Feeling lucky — a fresh but reliably listenable pattern each click.
-   Guardrails: solid kick/snare backbone, steady hats, a 4-bar root
-   progression that drives BOTH the 808 and the keys so they cohere
-   (everything stays pentatonic, so there are no clashing notes). */
+   Guardrails: solid kick/snare backbone, steady hats, and a real 4-bar
+   chord progression (from SCALES[mood].chords) that drives BOTH layers:
+   the 808 plays a chord tone locked to the kick rhythm, the keys restate
+   a 1-bar motif on each bar's chord tones. Everything stays pentatonic. */
 function randomState(){
   rng = mulberry32((Math.random()*4294967296)>>>0);   // genuine luck each click
   const cl=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -527,17 +528,41 @@ function randomState(){
   if(rng()<.35)[4,12].forEach(x=>G.drums[2][x]=true); // clap doubling the snare
   if(rng()<.25)G.drums[4][14]=true;                   // occasional open hat
 
-  // --- one 4-bar progression drives bass + melody ---
-  const prog = pick([[0,3,1,2],[0,2,3,1],[0,1,3,2],[0,0,2,3]]);   // chord index per bar
-  const bassRows = s.mood==='dark'?[5,3,1,0]:[5,4,2,0];           // low 808 rows per chord
-  prog.forEach((c,bar)=>{ const row=bassRows[c%bassRows.length], start=bar*4;
-    G.k808[row][start]=true; if(rng()<.6)G.k808[row][start+2]=true; });
+  // --- harmony: one real 4-bar progression drives 808 + keys ---
+  const chords=SCALES[s.mood].chords, pent=SCALES[s.mood].pent;
+  const prog=pick([[0,2,3,1],[0,3,1,2],[0,0,2,3],[0,1,2,3],[1,2,0,3]]);
+  const pcOf=(sec,row)=>{ const fb=sec.rows-1-row;
+    return (((sec.base+Math.floor(fb/5)*12+pent[fb%5])%12)+12)%12; };
+  const rowForPc=(sec,pcs,prefer)=>{ let best=null,bestD=99;
+    for(let r=0;r<sec.rows;r++){ if(!pcs.includes(pcOf(sec,r))) continue;
+      const d=Math.abs(r-prefer); if(d<bestD){bestD=d;best=r;} }
+    return best; };
+  const k808sec=secById('k808'), keyssec=secById('keys');
+  const kickSteps=[]; G.drums[0].forEach((v,x)=>{ if(v) kickSteps.push(x); });
 
-  // --- keys: a phrase — a note on every downbeat, small stepwise passing notes ---
-  let krow=pick([3,4,5]);
-  for(let x=0;x<16;x++){ const strong=x%4===0;
-    if(strong){ krow=cl(krow+pick([-2,-1,0,0,1,2]),1,7); G.keys[krow][x]=true; }
-    else if(rng()<.35){ krow=cl(krow+pick([-1,1]),1,7); G.keys[krow][x]=true; } }
+  // 808: a chord tone (root preferred) on every kick hit of that bar —
+  // bass locking to the kick is what makes it sound played, not scattered.
+  prog.forEach((ci,bar)=>{
+    const pcs=chords[ci].notes.map(n=>((n%12)+12)%12);
+    let row=rowForPc(k808sec,[pcs[0]],5) ?? rowForPc(k808sec,pcs.slice(1),5) ?? 5;
+    const hits=kickSteps.filter(x=>Math.floor(x/4)===bar);
+    (hits.length?hits:[bar*4]).forEach(x=>G.k808[row][x]=true);
+    if(bar===3&&rng()<.5) G.k808[cl(row-1,0,5)][15]=true;   // approach note into the loop
+  });
+
+  // keys: one rhythmic motif restated on each bar's chord tones, with a
+  // breath in bar 3 and a resolve in bar 4 — repetition is what reads as
+  // "written" instead of "dice".
+  const rhythm=pick([[0,2],[0,3],[0,2,3],[1,3],[0,1,3]]);
+  prog.forEach((ci,bar)=>{
+    const pcs=chords[ci].notes.map(n=>((n%12)+12)%12);
+    const anchor=rowForPc(keyssec,pcs,4) ?? pick([3,4]);
+    rhythm.forEach((off,i)=>{
+      if(bar===2&&i===rhythm.length-1&&rng()<.6) return;      // breathe
+      if(bar===3&&i>0&&off===rhythm[rhythm.length-1]) return;  // resolve: drop trailing hit
+      G.keys[cl(anchor+(i?pick([-1,0,1]):0),0,7)][bar*4+off]=true;
+    });
+  });
   return s; }
 
 /* ================= identity (Login-with-Raft) ================= */
