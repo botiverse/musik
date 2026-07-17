@@ -103,6 +103,12 @@ const API = (function(){
       logOp(d,id,published?'publish':'unpublish',{title:l.title});
       save(d); return l;
     },
+    async renameLoop(id, title){
+      const d=db(); const l=d.loops[id]; if(!l) throw new Error('loop 404');
+      l.title=title; l.updatedAt=now();
+      logOp(d,id,'rename',{title});
+      save(d); return l;
+    },
     async fork(id, title){
       const d=db(); const src=d.loops[id]; if(!src) throw new Error('loop 404');
       const nid=uid('loop');
@@ -132,6 +138,7 @@ const API = (function(){
     // opaque + auto-logs the op. graph omitted when a change carries no new graph.
     patchLoop:(id,action,payload,graph)=>req('PATCH','/loops/'+id,{graph,op:{action,payload}}),
     publish:(id,published=true)=>req('POST','/loops/'+id+'/publish',{published}),
+    renameLoop:(id,title)=>req('PATCH','/loops/'+id,{title}),   // backend auto-logs a rename op
     fork:(id,title)=>req('POST','/loops/'+id+'/fork',{title}),
     getOps:(id)=>req('GET','/loops/'+id+'/ops'),
     // optional global activity ticker; degrades to empty if backend lacks it

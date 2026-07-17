@@ -26,6 +26,7 @@ function useLoop(rec){
   $('#loopAuthorWrap'); // noop guard
   selId = graph.startId && nodeById(graph.startId) ? graph.startId
         : (graph.nodes[0] ? graph.nodes[0].id : null);
+  $('#songTitle').textContent = loop.title || '—';
   const ff = loop.forkedFrom;
   $('#lineage').style.display = ff? 'block':'none';
   if(ff) $('#lineageName').textContent = loop._forkedTitle || loop.title;
@@ -335,6 +336,26 @@ function dispBase(n){
   if(n.baseK) return t('node.'+n.baseK);
   return n.baseName||'';
 }
+/* rename the whole track (loop title) — backend title PATCH (author only) */
+async function renameLoopUI(){
+  if(!loop) return;
+  const v=prompt(t('loop.renamePrompt'), loop.title);
+  if(v===null) return;
+  const title=v.trim().slice(0,120);
+  if(!title || title===loop.title) return;
+  try{
+    const rec=await API.renameLoop(loop.id, title);
+    loop.title=(rec&&rec.title)||title;
+    $('#songTitle').textContent=loop.title;
+    refreshOps(); refreshFeed();
+  }catch(e){
+    if(/→ 403/.test(e.message)) toast(t('toast.notYours'));
+    else toast(t('toast.saveFail',{err:e.message}));
+  }
+}
+$('#renameLoopBtn').onclick=renameLoopUI;
+$('#songTitle').addEventListener('dblclick', renameLoopUI);
+
 /* rename a section — sets a custom name (dispName prefers it), persists in graph */
 function renameNode(id){
   const n=nodeById(id); if(!n || n.ghost) return;
