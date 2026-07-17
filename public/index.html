@@ -66,6 +66,12 @@
   main{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px;padding:16px 20px;align-items:start}
   @media (max-width:1040px){main{grid-template-columns:1fr}}
   .leftcol{display:flex;flex-direction:column;gap:16px;min-width:0}
+  .songbar{display:flex;align-items:center;gap:8px}
+  .songIcon{font-size:16px}
+  .songTitle{font-size:18px;font-weight:800;letter-spacing:.5px;cursor:text;padding:2px 4px;border-bottom:2px dashed transparent}
+  .songTitle:hover{border-bottom-color:var(--line)}
+  .songEdit{padding:3px 8px;box-shadow:none;opacity:.7}
+  .songEdit:hover{opacity:1}
 
   /* ---- graph ---- */
   .graphPane{background:var(--panel);border:3px solid var(--line);box-shadow:var(--hard);padding:12px}
@@ -186,6 +192,11 @@
 
 <main>
   <div class="leftcol">
+    <div class="songbar">
+      <span class="songIcon">🎵</span>
+      <span class="songTitle" id="songTitle" data-i18n-title="loop.renameHint" title="rename">—</span>
+      <button class="mini songEdit" id="renameLoopBtn" data-i18n-title="loop.renameHint" title="rename">✎</button>
+    </div>
     <!-- LOOP GRAPH -->
     <div class="graphPane">
       <div class="paneTop">
