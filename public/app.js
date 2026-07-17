@@ -350,22 +350,27 @@ function dispBase(n){
    cancel on Escape — no native prompt() dialogs */
 function inlineEdit(el, current, opts, commit){
   if(el.dataset.editing) return;
-  const input=document.createElement('input');
+  const ml=!!opts.multiline;
+  const input=document.createElement(ml?'textarea':'input');
   input.className='inlineEdit '+(opts.cls||''); input.value=current; input.maxLength=opts.max||60;
+  if(ml){ input.rows=1; input.spellcheck=false; }
   el.dataset.editing='1'; el.replaceWith(input); input.focus(); input.select();
+  const grow=()=>{ if(ml){ input.style.height='auto'; input.style.height=input.scrollHeight+'px'; } };
+  grow();
   let done=false;
   const finish=(save)=>{ if(done) return; done=true;
-    const v=input.value.trim(); input.replaceWith(el); delete el.dataset.editing;
+    const v=input.value.trim().replace(/\s+/g,' '); input.replaceWith(el); delete el.dataset.editing;
     if(save && v && v!==current) commit(v); };
+  input.addEventListener('input', grow);
   input.addEventListener('keydown',e=>{ e.stopPropagation();
-    if(e.key==='Enter'){ e.preventDefault(); finish(true); }
+    if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); finish(true); }  // Enter commits; text wraps on its own
     else if(e.key==='Escape'){ e.preventDefault(); finish(false); } });
   input.addEventListener('blur',()=>finish(true));
 }
 /* rename the whole track (loop title) — inline edit → backend title PATCH */
 function startLoopTitleEdit(){
   if(!loop) return;
-  inlineEdit($('#songTitle'), loop.title||'', {max:120, cls:'big'}, async(v)=>{
+  inlineEdit($('#songTitle'), loop.title||'', {max:120, cls:'big', multiline:true}, async(v)=>{
     try{ const rec=await API.renameLoop(loop.id, v); loop.title=(rec&&rec.title)||v;
       $('#songTitle').textContent=loop.title; refreshOps(); refreshFeed(); }
     catch(e){ $('#songTitle').textContent=loop.title;
@@ -488,7 +493,31 @@ async function refreshOps(){ if(!loop) return; let ops=[]; try{ ops=await API.ge
 
 /* ================= song lifecycle ================= */
 async function newSong(){ const rec=await API.createLoop({ title:nextTitle(), graph:freshGraph() });
-  useLoop(rec); toast(t('toast.newSong',{title:rec.title})); }
+  useLoop(rec); toast(t('toast.newSong',{title:rec.title})); refreshMyLoops(); }
+
+/* ================= loop browser (switch among your own works) ================= */
+async function openLoopMenu(){
+  const menu=$('#loopMenu'); menu.innerHTML='';
+  let ls=[]; try{ ls=await API.listLoops(); }catch(e){}
+  const mine=ls.filter(l=>l.authorId===RAP.actor.id)
+    .sort((a,b)=>String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  mine.forEach(l=>{ const d=document.createElement('div');
+    d.className='loopItem'+(loop && l.id===loop.id?' active':'');
+    const nm=document.createElement('span'); nm.textContent=l.title||'—'; d.appendChild(nm);
+    if(l.published){ const dot=document.createElement('span'); dot.className='dot'; dot.textContent='●'; d.appendChild(dot); }
+    d.onclick=async()=>{ menu.classList.remove('show'); if(loop && l.id===loop.id) return;
+      try{ const full=await API.getLoop(l.id); useLoop(full); }catch(e){ toast(t('toast.saveFail',{err:e.message})); } };
+    menu.appendChild(d); });
+  if(!mine.length){ const e=document.createElement('div'); e.className='loopItem emptyItem'; e.textContent=t('browser.empty'); menu.appendChild(e); }
+  const nw=document.createElement('div'); nw.className='loopItem newItem'; nw.textContent=t('browser.newLoop');
+  nw.onclick=()=>{ menu.classList.remove('show'); newSong(); };
+  menu.appendChild(nw); menu.classList.add('show');
+}
+function refreshMyLoops(){ if($('#loopMenu') && $('#loopMenu').classList.contains('show')) openLoopMenu(); }
+$('#myLoopsBtn').addEventListener('click', e=>{ e.stopPropagation();
+  const m=$('#loopMenu'); m.classList.contains('show')? m.classList.remove('show') : openLoopMenu(); });
+$('#loopMenu').addEventListener('click', e=>e.stopPropagation());
+document.addEventListener('click', ()=>$('#loopMenu').classList.remove('show'));
 function freshGraph(){
   const a=starterState(), b=mutate(a,'lift');
   return { nodes:[{id:'n1',k:'verse',x:50,y:118,reps:2,state:a},
@@ -508,8 +537,17 @@ $('#publishBtn').onclick=async()=>{ if(!loop) return;
   $('#publishBtn').textContent=loop.published?t('board.published'):t('board.publish'); $('#publishBtn').classList.toggle('on',loop.published);
   toast(loop.published?t('toast.publishOk'):t('toast.unpublishOk')); refreshFeed(); refreshOps(); };
 $('#forkBtn').onclick=async()=>{ if(!loop) return; await doFork(loop.id, loop.title); };
-async function doFork(id, title){ const rec=await API.fork(id, title? title+' · '+t('node.flipSuffix'):undefined);
-  rec._forkedTitle=title; useLoop(rec); toast(t('toast.flipOk')); refreshFeed(); window.scrollTo({top:0,behavior:'smooth'}); }
+/* strip stacked flip/fork suffixes so repeated 接力 doesn't pile up
+   "X · flip · flip · flip"; a fork keeps the source's base name */
+function baseTitle(title){
+  // strip a trailing flip/fork token (any separator char) repeatedly
+  const re=/[\s·•・|\-–]*(?:flip|Flip|接力版|\(fork\))\s*$/;
+  let s=(title||'').trim(), prev;
+  do{ prev=s; s=s.replace(re,'').trim(); }while(s && s!==prev);
+  return s||title||'Untitled';
+}
+async function doFork(id, title){ const rec=await API.fork(id, baseTitle(title));
+  rec._forkedTitle=baseTitle(title); useLoop(rec); toast(t('toast.flipOk')); refreshFeed(); refreshMyLoops(); window.scrollTo({top:0,behavior:'smooth'}); }
 $('#wavBtn').onclick=async()=>{ if(!loop) return; ensureAudio(); toast(t('toast.renderWav'));
   const buf=await renderState(st,2); const a=document.createElement('a'); a.href=URL.createObjectURL(bufToWav(buf)); a.download=(dispName(selNode())||'loop')+'.wav'; a.click(); };
 $('#songWavBtn').onclick=async()=>{ if(!loop) return; ensureAudio(); const seq=buildSong(); if(!seq.length){ toast(t('toast.noSections')); return; }
