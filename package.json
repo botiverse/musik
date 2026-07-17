@@ -1,0 +1,10 @@
+{
+  "name": "musik-build-server",
+  "version": "1.0.0",
+  "description": "musik.build API server — Bun + TypeScript port of the Python stdlib backend",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/server.ts",
+    "smoke": "bun run smoke.ts"
+  }
+}
