@@ -1,0 +1,7 @@
+# Runtime data & secrets — never commit
+data/
+app.env
+secret.json
+__pycache__/
+*.pyc
+.DS_Store
