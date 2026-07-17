@@ -330,14 +330,24 @@ class Handler(BaseHTTPRequestHandler):
         if body is None:
             return self._err(400, "BAD_JSON", "request body must be valid JSON")
         graph = body.get("graph")
-        if not valid_graph(graph):
+        title = body.get("title")
+        title = str(title).strip()[:120] if title is not None else None
+        if title == "":
+            title = None
+        if graph is None and title is None:
+            return self._err(400, "BAD_REQUEST",
+                             "PATCH needs graph and/or title")
+        if graph is not None and not valid_graph(graph):
             return self._err(400, "BAD_GRAPH",
                              "graph must be an object with nodes[] and edges[]")
         op = body.get("op") or {}
-        action = str(op.get("action") or "update_graph")[:40]
+        default_action = "rename" if graph is None else "update_graph"
+        action = str(op.get("action") or default_action)[:40]
         payload = op.get("payload") if isinstance(op.get("payload"), dict) else None
+        if payload is None and title is not None:
+            payload = {"title": title}
         return self._send_json(200, store.update_graph(loop["id"], graph, actor,
-                                                       action, payload))
+                                                       action, payload, title))
 
     # ---- Login with Raft ----
 

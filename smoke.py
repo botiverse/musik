@@ -104,6 +104,16 @@ def main():
                         {"graph": g2, "op": {"action": "add_node", "payload": {"id": "n2"}}})
             check("author PATCH", s == 200 and len(b["graph"]["nodes"]) == 2)
 
+            s, b = call("PATCH", f"/api/loops/{lid}", ALICE, {"title": "Renamed Metro"})
+            check("rename via title-only PATCH", s == 200 and b["title"] == "Renamed Metro"
+                  and len(b["graph"]["nodes"]) == 2)
+
+            s, b = call("PATCH", f"/api/loops/{lid}", ED, {"title": "Hijack"})
+            check("non-author rename -> 403", s == 403)
+
+            s, b = call("PATCH", f"/api/loops/{lid}", ALICE, {})
+            check("empty PATCH -> 400", s == 400)
+
             s, b = call("POST", f"/api/loops/{lid}/fork", ED, {})
             check("fork unpublished other's -> 403", s == 403)
 
@@ -126,9 +136,10 @@ def main():
             s, ops = call("GET", f"/api/loops/{lid}/ops", ED)
             actions = [o["action"] for o in ops]
             check("loop ops", s == 200 and actions ==
-                  ["create_loop", "add_node", "publish"], str(actions))
+                  ["create_loop", "add_node", "rename", "publish"], str(actions))
             check("op actor recorded", ops[1]["actorId"] == "alice"
                   and ops[1]["actorKind"] == "human")
+            check("rename op payload", ops[2]["payload"] == {"title": "Renamed Metro"})
 
             s, fops = call("GET", f"/api/loops/{fork['id']}/ops", ALICE)
             check("fork op on child", s == 200 and len(fops) == 1

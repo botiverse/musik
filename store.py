@@ -124,13 +124,22 @@ class Store:
                 rows = self.db.execute("SELECT * FROM loops ORDER BY created_at DESC").fetchall()
         return [_loop_from_row(r) for r in rows]
 
-    def update_graph(self, loop_id: str, graph: dict, actor: dict,
-                     action: str, payload: dict | None) -> dict:
+    def update_graph(self, loop_id: str, graph: dict | None, actor: dict,
+                     action: str, payload: dict | None,
+                     title: str | None = None) -> dict:
         with self._lock, self.db:
-            self.db.execute(
-                "UPDATE loops SET graph=?, updated_at=? WHERE id=?",
-                (json.dumps(graph), now_iso(), loop_id),
-            )
+            if graph is not None and title is not None:
+                self.db.execute(
+                    "UPDATE loops SET graph=?, title=?, updated_at=? WHERE id=?",
+                    (json.dumps(graph), title, now_iso(), loop_id))
+            elif graph is not None:
+                self.db.execute(
+                    "UPDATE loops SET graph=?, updated_at=? WHERE id=?",
+                    (json.dumps(graph), now_iso(), loop_id))
+            else:
+                self.db.execute(
+                    "UPDATE loops SET title=?, updated_at=? WHERE id=?",
+                    (title, now_iso(), loop_id))
         self.insert_op(loop_id, actor, action, payload)
         return self.get_loop(loop_id)
 
