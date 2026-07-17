@@ -5,3 +5,8 @@ secret.json
 __pycache__/
 *.pyc
 .DS_Store
+
+# CF worker tooling
+node_modules/
+.wrangler/
+.dev.vars

@@ -20,17 +20,46 @@ Mapping vs the Python version:
 
 | Python | TypeScript | notes |
 |---|---|---|
-| `server.py` | `src/server.ts` | `Bun.serve` instead of `ThreadingHTTPServer` |
-| `store.py` | `src/store.ts` | `bun:sqlite`, camelCase methods (`createLoop`, …) |
+| `server.py` | `src/server.ts` | runtime-neutral `createHandler(config, store)`; `Bun.serve` entry at the bottom |
+| `store.py` | `src/store.ts` | `bun:sqlite`, camelCase methods (`createLoop`, …), `async` signatures |
+| — | `src/loop-store.ts` | `LoopStore` async interface + row-mapping helpers shared by both stores |
+| — | `src/store-d1.ts` | `LoopStore` over a Cloudflare D1 binding (same SQL) |
+| — | `src/worker.ts` | Cloudflare Worker entry (`export default { fetch }`) |
 | `smoke.py` | `smoke.ts` | spawns the TS server; identical checks |
 | — | `shared/types.ts` | Loop/Op/Actor/Graph contract, shared with the frontend later |
 
 The request handler in `src/server.ts` is a plain
-`fetch(request: Request): Promise<Response>` (`handleRequest`) with no
-Bun-specific APIs in the request path — `Bun.serve` wraps it now, and a
-Cloudflare Worker entry can wrap the same handler later (only `src/store.ts`
-and static file serving are runtime-coupled; both map to Worker bindings).
+`fetch(request: Request): Promise<Response>` built by
+`createHandler(config, store, fallback?)` with no runtime-specific APIs in
+the request path — the Bun entrypoint constructs config from `process.env`
+plus the `bun:sqlite` store and wraps it in `Bun.serve` (guarded by
+`import.meta.main`, so importing the module never starts a listener).
 Outbound HTTP uses `User-Agent: musik-build/1.0`.
+
+### Cloudflare Workers + D1 deployment
+
+The same handler runs as a Worker: `src/worker.ts` builds the config from
+env bindings, swaps in `src/store-d1.ts` (D1), routes `/api/*`, `/login`,
+`/login/raft/callback`, `/logout` and the agent manifest to the handler,
+and delegates everything else to Workers Static Assets (`./public`, binding
+`ASSETS`). The schema lives in `migrations/0001_init.sql` — the D1 store
+never creates tables at runtime.
+
+Deploy steps:
+
+```bash
+bun install                                # once (wrangler devDependency)
+bunx wrangler d1 create musik              # copy the database_id into wrangler.toml
+bunx wrangler d1 migrations apply musik    # creates loops/ops tables
+bunx wrangler secret put RAFT_CLIENT_SECRET
+bun run cf:dev                             # local workerd dev server
+bun run cf:deploy                          # wrangler deploy
+```
+
+Non-secret config (`RAFT_ORIGIN`, `RAFT_API_ORIGIN`, `RAFT_CLIENT_ID`,
+`APP_ORIGIN`) lives in `[vars]` in `wrangler.toml`; `DEV_AUTH` stays unset
+in production. Local development stays on Bun (`bun run dev` /
+`bun run smoke`) — the Python server remains the reference implementation.
 
 ## Run (Python reference implementation)
 

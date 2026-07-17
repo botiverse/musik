@@ -10,10 +10,14 @@
  * ORDER BY clauses. Python's `ORDER BY ts` alone leaves same-millisecond
  * ops in unspecified order; the tiebreaker makes the (already implicit)
  * insertion order deterministic.
+ *
+ * Methods are async to satisfy LoopStore (shared with the D1 store); the
+ * bun:sqlite driver underneath stays synchronous.
  */
 
 import { Database } from "bun:sqlite";
 import type { Actor, Graph, Loop, Op } from "../shared/types";
+import { loopFromRow, newId, nowIso, opFromRow, type LoopStore } from "./loop-store";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS loops (
@@ -45,50 +49,7 @@ CREATE INDEX IF NOT EXISTS idx_ops_ts   ON ops(ts);
 CREATE INDEX IF NOT EXISTS idx_loops_pub ON loops(published, published_at);
 `;
 
-/** ISO-8601 UTC with milliseconds, in the same shape as Python's
- *  datetime.now(timezone.utc).isoformat(timespec="milliseconds")
- *  (e.g. 2026-07-17T09:48:54.384+00:00). */
-export function nowIso(): string {
-  return new Date().toISOString().replace("Z", "+00:00");
-}
-
-/** 32-hex uuid, no dashes (same as uuid4().hex). */
-export function newId(): string {
-  return crypto.randomUUID().replaceAll("-", "");
-}
-
-function loopFromRow(row: any): Loop {
-  return {
-    id: row.id,
-    title: row.title,
-    authorId: row.author_id,
-    authorKind: row.author_kind,
-    authorName: row.author_name,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    graph: JSON.parse(row.graph),
-    forkedFrom: row.forked_from,
-    forkRoot: row.fork_root,
-    published: !!row.published,
-    publishedAt: row.published_at,
-  };
-}
-
-function opFromRow(row: any): Op {
-  return {
-    id: row.id,
-    loopId: row.loop_id,
-    loopTitle: "loop_title" in row ? row.loop_title : null,
-    actorId: row.actor_id,
-    actorKind: row.actor_kind,
-    actorName: row.actor_name,
-    action: row.action,
-    payload: row.payload ? JSON.parse(row.payload) : null,
-    ts: row.ts,
-  };
-}
-
-export class Store {
+export class Store implements LoopStore {
   private db: Database;
 
   constructor(path: string) {
@@ -98,7 +59,7 @@ export class Store {
 
   // ---- loops ----
 
-  createLoop(title: string, graph: Graph, actor: Actor): Loop {
+  async createLoop(title: string, graph: Graph, actor: Actor): Promise<Loop> {
     const lid = newId();
     const ts = nowIso();
     this.db
@@ -109,16 +70,16 @@ export class Store {
       )
       .run(lid, title, actor.id, actor.kind, actor.name ?? null, ts, ts,
            JSON.stringify(graph), null, lid);
-    this.insertOp(lid, actor, "create_loop", { title });
-    return this.getLoop(lid)!;
+    await this.insertOp(lid, actor, "create_loop", { title });
+    return (await this.getLoop(lid))!;
   }
 
-  getLoop(loopId: string): Loop | null {
+  async getLoop(loopId: string): Promise<Loop | null> {
     const row = this.db.query("SELECT * FROM loops WHERE id=?").get(loopId);
     return row ? loopFromRow(row) : null;
   }
 
-  listLoops(publishedOnly = false): Loop[] {
+  async listLoops(publishedOnly = false): Promise<Loop[]> {
     const rows = publishedOnly
       ? this.db
           .query("SELECT * FROM loops WHERE published=1 ORDER BY published_at DESC")
@@ -127,14 +88,14 @@ export class Store {
     return rows.map(loopFromRow);
   }
 
-  updateGraph(
+  async updateGraph(
     loopId: string,
     graph: Graph | null,
     actor: Actor,
     action: string,
     payload: Record<string, any> | null,
     title: string | null = null
-  ): Loop {
+  ): Promise<Loop> {
     if (graph !== null && title !== null) {
       this.db
         .query("UPDATE loops SET graph=?, title=?, updated_at=? WHERE id=?")
@@ -148,20 +109,20 @@ export class Store {
         .query("UPDATE loops SET title=?, updated_at=? WHERE id=?")
         .run(title, nowIso(), loopId);
     }
-    this.insertOp(loopId, actor, action, payload);
-    return this.getLoop(loopId)!;
+    await this.insertOp(loopId, actor, action, payload);
+    return (await this.getLoop(loopId))!;
   }
 
-  publishLoop(loopId: string, actor: Actor): Loop {
+  async publishLoop(loopId: string, actor: Actor): Promise<Loop> {
     const ts = nowIso();
     this.db
       .query("UPDATE loops SET published=1, published_at=?, updated_at=? WHERE id=?")
       .run(ts, ts, loopId);
-    this.insertOp(loopId, actor, "publish", null);
-    return this.getLoop(loopId)!;
+    await this.insertOp(loopId, actor, "publish", null);
+    return (await this.getLoop(loopId))!;
   }
 
-  forkLoop(parent: Loop, actor: Actor, title: string | null): Loop {
+  async forkLoop(parent: Loop, actor: Actor, title: string | null): Promise<Loop> {
     const lid = newId();
     const ts = nowIso();
     const forkRoot = parent.forkRoot || parent.id;
@@ -174,23 +135,23 @@ export class Store {
       )
       .run(lid, forkTitle, actor.id, actor.kind, actor.name ?? null, ts, ts,
            JSON.stringify(parent.graph), parent.id, forkRoot);
-    this.insertOp(lid, actor, "fork", {
+    await this.insertOp(lid, actor, "fork", {
       from: parent.id,
       fromTitle: parent.title,
       fromAuthor: parent.authorId,
       fromAuthorName: parent.authorName ?? null,
     });
-    return this.getLoop(lid)!;
+    return (await this.getLoop(lid))!;
   }
 
   // ---- ops ----
 
-  insertOp(
+  async insertOp(
     loopId: string,
     actor: Actor,
     action: string,
     payload: Record<string, any> | null
-  ): Op {
+  ): Promise<Op> {
     const oid = newId();
     const ts = nowIso();
     this.db
@@ -212,14 +173,14 @@ export class Store {
     };
   }
 
-  listOps(loopId: string): Op[] {
+  async listOps(loopId: string): Promise<Op[]> {
     const rows = this.db
       .query("SELECT * FROM ops WHERE loop_id=? ORDER BY ts ASC, rowid ASC")
       .all(loopId);
     return rows.map(opFromRow);
   }
 
-  recentOps(limit = 20): Op[] {
+  async recentOps(limit = 20): Promise<Op[]> {
     const rows = this.db
       .query(
         "SELECT ops.*, loops.title AS loop_title FROM ops" +

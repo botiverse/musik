@@ -5,6 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "bun run src/server.ts",
-    "smoke": "bun run smoke.ts"
+    "smoke": "bun run smoke.ts",
+    "cf:dev": "wrangler dev",
+    "cf:deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
   }
 }
