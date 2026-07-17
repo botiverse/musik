@@ -13,8 +13,16 @@ import json
 import random
 import subprocess
 import sys
+from pathlib import Path
 
-CLI = "/Users/richard/.slock/cli-transport/e3f79e7e-055f-4272-b067-0de2036a90b5/5ad590e4-f3f2-4b88-a336-7c51d9b7b79d/slock"
+def _find_cli():
+    """Newest daemon-issued CLI wrapper (tokens rotate across daemon restarts)."""
+    base = Path("/Users/richard/.slock/cli-transport/e3f79e7e-055f-4272-b067-0de2036a90b5")
+    wrappers = sorted((d / "slock" for d in base.iterdir() if (d / "slock").exists()),
+                      key=lambda p: p.stat().st_mtime)
+    return str(wrappers[-1])
+
+CLI = _find_cli()
 MY_ID = "e3f79e7e-055f-4272-b067-0de2036a90b5"
 STEPS = 16
 
