@@ -233,7 +233,7 @@ function renderGraph(){
     const el=document.createElement('div'); el.className='gnode'+(n.id===selId?' selected':'')+(n.id===graph.startId?' startNode':'')+(n.ghost?' ghostNode':'');
     el.style.left=n.x+'px'; el.style.top=n.y+'px'; el.dataset.id=n.id;
     const cv=document.createElement('canvas'); drawThumb(cv, n.state); el.appendChild(cv);
-    const nm=document.createElement('div'); nm.className='nname'; nm.textContent=dispName(n); el.appendChild(nm);
+    const nm=document.createElement('div'); nm.className='nname'; nm.textContent=dispName(n); if(!n.ghost) nm.title=t('node.renameHint'); el.appendChild(nm);
     if(n.ghost){
       const gb=document.createElement('div'); gb.className='ghostBtns';
       gb.innerHTML=`<button data-acc="${n.id}">✓</button><button data-rej="${n.id}">✗</button>`;
@@ -300,6 +300,11 @@ window.addEventListener('pointerup',e=>{
     if(node && node.dataset.id!==edgeDrag.from){ addEdge(edgeDrag.from, node.dataset.id); } edgeDrag=null; }
   if(dragging){ if(dragging.moved) op('move',{node:dispName(nodeById(dragging.id))}); dragging=null; }
 });
+gArea.addEventListener('dblclick',e=>{  // double-click a node's name to rename it
+  const nm=e.target.closest('.nname'); if(!nm) return;
+  const node=nm.closest('.gnode'); if(node){ e.stopPropagation(); renameNode(node.dataset.id); } });
+$('#nodeName').style.cursor='text'; $('#nodeName').title=t('node.renameHint');
+$('#nodeName').addEventListener('dblclick', ()=>{ if(loop && selNode() && !selNode().ghost) renameNode(selId); });
 gArea.addEventListener('click',e=>{
   const acc=e.target.dataset?.acc, rej=e.target.dataset?.rej, del=e.target.dataset?.del,
         reps=e.target.dataset?.reps, play=e.target.dataset?.play, start=e.target.dataset?.start,
@@ -329,6 +334,18 @@ function dispBase(n){
   if(n.baseK==='section') return t('node.section',{letter:n.baseLetter||'?'});
   if(n.baseK) return t('node.'+n.baseK);
   return n.baseName||'';
+}
+/* rename a section — sets a custom name (dispName prefers it), persists in graph */
+function renameNode(id){
+  const n=nodeById(id); if(!n || n.ghost) return;
+  const cur=dispName(n);
+  const v=prompt(t('node.renamePrompt'), cur);
+  if(v===null) return;
+  const name=v.trim().slice(0,40);
+  if(!name || name===cur) return;
+  n.custom=true; n.name=name;
+  selectNode(selId,{silent:true}); renderGraph();
+  op('rename',{node:name, from:cur});
 }
 function addNode(state, x, y, opts={}){
   graph.counter=(graph.counter||graph.nodes.length)+1;
