@@ -439,8 +439,11 @@ function freshGraph(){
                   {id:'n2',k:'chorus',x:300,y:40,reps:2,state:b}],
            edges:[{from:'n1',to:'n2'},{from:'n2',to:'n1'}], startId:'n1', counter:2 }; }
 $('#addNodeBtn'); // wired above
-$('#starterBtn').onclick=()=>{ if(!loop) return; Object.assign(st, starterState()); ensureShape(st);
-  buildBoard(); renderNodeThumb(selId); op('paint',{node:dispName(selNode()), sections:['drums','k808','keys'], on:true}); if(!playing) startLoop('node'); };
+$('#starterBtn').onclick=()=>{ if(!loop) return;
+  Object.assign(selNode().state, randomState());          // roll a fresh random pattern
+  selectNode(selId,{silent:true}); renderNodeThumb(selId); // refresh canvas + BPM/Swing/mood UI
+  op('paint',{node:dispName(selNode()), sections:['drums','k808','keys'], on:true, random:true});
+  if(!playing) startLoop('node'); };
 $('#clearBtn').onclick=()=>{ if(!loop) return; st.grids=emptyGrids(); st.bars={}; buildBoard(); renderNodeThumb(selId); op('clear',{node:dispName(selNode())}); };
 $('#publishBtn').onclick=async()=>{ if(!loop) return;
   const any=graph.nodes.some(n=>SECTIONS.some(s=>n.state.grids[s.id].some(r=>r.some(v=>v))));
@@ -498,6 +501,43 @@ function starterState(){ const s=emptyState(); const G=s.grids;
   G.k808[5][0]=true; G.k808[5][1]=true; G.k808[3][8]=true; G.k808[3][9]=true;         // 808
   [0,4,7,11].forEach((x,i)=>G.keys[[3,2,4,3][i]][x]=true);                            // keys
   s.bars={0:'yeah',4:'flow',8:'on',12:'beat'}; [0,4,8,12].forEach(x=>G.bars[0][x]=true);
+  return s; }
+/* 🎲 Feeling lucky — a fresh but reliably listenable pattern each click.
+   Guardrails: solid kick/snare backbone, steady hats, a 4-bar root
+   progression that drives BOTH the 808 and the keys so they cohere
+   (everything stays pentatonic, so there are no clashing notes). */
+function randomState(){
+  rng = mulberry32((Math.random()*4294967296)>>>0);   // genuine luck each click
+  const cl=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const s=emptyState(); const G=s.grids;
+  s.mood = rng()<.5?'dark':'bright'; curMood=s.mood;
+  s.bpm  = pick([84,88,90,92,96,100]);                // groove-friendly range
+  s.swing= pick([0.08,0.12,0.16]);
+
+  // --- drums: guaranteed groove ---
+  const kickStyle=pick(['four','boombap','trap']);
+  if(kickStyle==='four')       [0,4,8,12].forEach(x=>G.drums[0][x]=true);
+  else if(kickStyle==='boombap'){ [0,10].forEach(x=>G.drums[0][x]=true); if(rng()<.6)G.drums[0][7]=true; }
+  else                         [0,3,6,10].forEach(x=>G.drums[0][x]=true);
+  G.drums[0][0]=true;                                 // always a downbeat kick
+  [4,12].forEach(x=>G.drums[1][x]=true);              // snare on the backbeat
+  const hatStep = rng()<.55?2:1;                      // steady 8ths or 16ths
+  for(let x=0;x<16;x+=hatStep) G.drums[3][x]=true;
+  if(rng()<.4)[14,15].forEach(x=>G.drums[3][x]=true); // tiny end-of-bar roll
+  if(rng()<.35)[4,12].forEach(x=>G.drums[2][x]=true); // clap doubling the snare
+  if(rng()<.25)G.drums[4][14]=true;                   // occasional open hat
+
+  // --- one 4-bar progression drives bass + melody ---
+  const prog = pick([[0,3,1,2],[0,2,3,1],[0,1,3,2],[0,0,2,3]]);   // chord index per bar
+  const bassRows = s.mood==='dark'?[5,3,1,0]:[5,4,2,0];           // low 808 rows per chord
+  prog.forEach((c,bar)=>{ const row=bassRows[c%bassRows.length], start=bar*4;
+    G.k808[row][start]=true; if(rng()<.6)G.k808[row][start+2]=true; });
+
+  // --- keys: a phrase — a note on every downbeat, small stepwise passing notes ---
+  let krow=pick([3,4,5]);
+  for(let x=0;x<16;x++){ const strong=x%4===0;
+    if(strong){ krow=cl(krow+pick([-2,-1,0,0,1,2]),1,7); G.keys[krow][x]=true; }
+    else if(rng()<.35){ krow=cl(krow+pick([-1,1]),1,7); G.keys[krow][x]=true; } }
   return s; }
 
 /* ================= identity (Login-with-Raft) ================= */
