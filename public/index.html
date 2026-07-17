@@ -78,7 +78,7 @@
   .loopBrowser{position:relative;margin-left:6px}
   .loopMenu{display:none;position:absolute;left:0;top:calc(100% + 6px);background:var(--panel);border:2px solid var(--line);box-shadow:var(--hard);min-width:230px;max-height:320px;overflow-y:auto;z-index:40;padding:5px}
   .loopMenu.show{display:block}
-  .loopItem{display:flex;align-items:center;gap:8px;padding:7px 9px;cursor:pointer;font-size:12px}
+  .loopItem{display:flex;align-items:center;gap:8px;padding:7px 9px;cursor:pointer;font-size:12px;overflow-wrap:anywhere}
   .loopItem:hover{background:var(--panel2)}
   .loopItem.active{border-left:3px solid var(--accent);background:var(--panel2)}
   .loopItem .dot{margin-left:auto;color:var(--ok);font-size:11px}
@@ -99,7 +99,7 @@
     border-top-color:#6e6350;border-left-color:#6e6350;box-shadow:var(--hard);padding:8px;cursor:grab;user-select:none;touch-action:none}
   .gnode:active{cursor:grabbing}
   .gnode canvas{width:100%;height:42px;background:var(--bg);border:1px solid #0e0c07;image-rendering:pixelated;display:block}
-  .gnode .nname{font-size:12px;font-weight:800;margin:5px 0 2px;background:#f2e9d0;color:#1d1a12;padding:2px 6px;transform:rotate(-.6deg);display:flex;align-items:center;gap:4px}
+  .gnode .nname{overflow-wrap:anywhere;font-size:12px;font-weight:800;margin:5px 0 2px;background:#f2e9d0;color:#1d1a12;padding:2px 6px;transform:rotate(-.6deg);display:flex;align-items:center;gap:4px}
   .gnode .nmeta{font-size:10px;color:var(--dim);display:flex;gap:5px;align-items:center;flex-wrap:wrap}
   .gnode .nmeta button{padding:1px 6px;font-size:10px;box-shadow:none}
   .gnode.selected{border-color:var(--accent);box-shadow:3px 3px 0 rgba(255,176,0,.5)}
@@ -115,10 +115,11 @@
   /* ---- canvas ---- */
   .board{background:var(--panel);border:3px solid var(--line);padding:12px;box-shadow:var(--hard)}
   .loopbar{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
-  .loopbar .tt{font-size:15px;font-weight:800} .loopbar .au{font-size:11px;color:var(--dim)}
+  .loopbar .tt{font-size:15px;font-weight:800;overflow-wrap:anywhere} .loopbar .au{font-size:11px;color:var(--dim)}
   .loopbar .editing{font-size:11px;color:var(--keys)}
   .lineage{display:none;font-size:11px;color:var(--dim);border:1px dashed var(--line);padding:3px 8px}
   .lineage b{color:var(--bars)}
+  .lineage{overflow-wrap:anywhere}
   .section{margin-bottom:9px}
   .secHead{display:flex;align-items:center;gap:8px;margin:2px 0 5px}
   .secName{font-size:12px;font-weight:800;letter-spacing:1.5px}
@@ -162,7 +163,7 @@
   .opHead{display:flex;align-items:center;justify-content:space-between}
   .opHead .cnt{font-size:10px;color:var(--dim)}
   .opList{background:var(--bg);border:2px solid var(--line);padding:8px;height:210px;overflow-y:auto;display:flex;flex-direction:column;gap:5px;font-size:11.5px}
-  .opline{line-height:1.4;border-left:3px solid var(--line);padding-left:7px}
+  .opline{line-height:1.4;border-left:3px solid var(--line);padding-left:7px;overflow-wrap:anywhere}
   .opline.agent{border-color:var(--agent)} .opline.human{border-color:var(--human)}
   .opline .who{font-weight:700} .opline.agent .who{color:var(--agent)} .opline.human .who{color:var(--human)}
   .opline .ex{color:var(--dim)} .opList .empty{color:var(--dim);font-size:11px}
@@ -173,7 +174,7 @@
   .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
   .card{background:var(--panel);border:2px solid var(--line);border-top-color:#6e6350;border-left-color:#6e6350;box-shadow:var(--hard);padding:10px;display:flex;flex-direction:column;gap:7px}
   .card canvas{width:100%;background:var(--bg);border:1px solid #0e0c07;image-rendering:pixelated}
-  .card .t{font-weight:800;font-size:13px} .card .meta{font-size:10px;color:var(--dim)} .card .from{color:var(--bars)}
+  .card .t{font-weight:800;font-size:13px;overflow-wrap:anywhere} .card .meta{font-size:10px;color:var(--dim)} .card .from{color:var(--bars)}
   .card .nodes{font-size:10px;color:var(--dim)}
   .card .btns{display:flex;gap:6px} .card .btns button{flex:1}
   .empty{color:var(--dim);font-size:12px;padding:16px}
@@ -255,26 +256,13 @@
       <div class="boardFoot">
         <button class="mini" id="clearBtn" data-i18n="board.clear">🧹</button>
         <button class="mini" id="starterBtn" data-i18n="board.starter">🎲</button>
+        <button class="mini" id="arrangeBtn" data-i18n="board.variants">✨ Variants</button>
         <span class="note" data-i18n="board.note"></span>
       </div>
     </div>
   </div>
 
   <aside>
-    <div class="pane">
-      <h3><span data-i18n="crew.title">🎛 Crew</span> <span class="raftBadge" data-i18n="crew.badge">RAFT AGENTS</span></h3>
-      <div class="crewSub" data-i18n="crew.sub" data-i18n-html></div>
-      <div class="agents">
-        <button class="agentBtn" data-agent="beat"><span class="em">🥁</span><span>@Beat<small data-i18n="agents.beat"></small></span></button>
-        <button class="agentBtn" data-agent="k808"><span class="em">🔊</span><span>@808<small data-i18n="agents.k808"></small></span></button>
-        <button class="agentBtn" data-agent="hook"><span class="em">🎹</span><span>@Hook<small data-i18n="agents.hook"></small></span></button>
-        <button class="agentBtn" data-agent="flow"><span class="em">🎤</span><span>@Flow<small data-i18n="agents.flow"></small></span></button>
-      </div>
-      <div class="arrangeRow"><button class="mini" id="arrangeBtn" data-i18n="crew.arrange">✨</button></div>
-      <div class="chat" id="chat"></div>
-      <div class="proposalBar" id="proposalBar"><button class="accept" id="acceptBtn" data-i18n="crew.accept">✓</button><button id="rejectBtn" data-i18n="crew.reject">✗</button></div>
-    </div>
-
     <div class="pane">
       <div class="opHead"><h3 data-i18n="history.title">📋</h3><span class="cnt"><span id="opCount">0</span> <span data-i18n="history.steps">steps</span></span></div>
       <div class="crewSub" data-i18n="history.sub"></div>

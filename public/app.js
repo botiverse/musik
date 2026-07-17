@@ -411,53 +411,20 @@ $('#addNodeBtn').onclick=()=>{ if(!loop) return;
     {reps:2, k:'section', letter:String.fromCharCode(64+(graph.nodes.length%26))});
   selectNode(n.id); renderGraph(); op('add_node',{node:dispName(n)}); toast(t('toast.addSection',{name:dispName(n)})); };
 
-/* ================= Crew agents (pattern ghost into selected node) ================= */
-let ghost=null;
-const AGENTS={ beat:{name:'@Beat',em:'🥁',color:'var(--drum)'}, k808:{name:'@808',em:'🔊',color:'var(--i808)'},
-  hook:{name:'@Hook',em:'🎹',color:'var(--keys)'}, flow:{name:'@Flow',em:'🎤',color:'var(--bars)'},
-  arranger:{name:'@Arranger',em:'✨',color:'var(--accent)'} };
-function mk(rows){ return Array.from({length:rows},()=>Array(STEPS).fill(false)); }
-function chatSay(a,t){ const c=$('#chat'); const m=document.createElement('div'); m.className='msg';
-  m.innerHTML=`<div class="av">${a.em}</div><div><div class="who" style="color:${a.color}">${a.name}</div>${t}</div>`; c.appendChild(m); c.scrollTop=c.scrollHeight; }
-function chatSys(t){ const c=$('#chat'); const m=document.createElement('div'); m.className='msg sys'; m.textContent=t; c.appendChild(m); c.scrollTop=c.scrollHeight; }
-function setGhost(section,grid,key,msg){ if(ghost) clearGhost(false);
-  ghost={section,grid,agent:key}; paintAll(); $('#proposalBar').classList.add('show'); chatSay(AGENTS[key],msg);
-  if(!playing&&loop) startLoop('node'); }
-function clearGhost(accept){ if(!ghost) return; const key=ghost.agent, sec=ghost.section, grid=ghost.grid;
-  if(accept){ const g=st.grids[sec]; grid.forEach((row,r)=>row.forEach((v,c)=>{ if(v) g[r][c]=true; }));
-    chatSay(AGENTS[key],t('chat.accepted')); ghost=null; $('#proposalBar').classList.remove('show'); paintAll(); renderNodeThumb(selId);
-    op('agent_fill',{node:dispName(selNode()), section:sec, agent:AGENTS[key].name}); }
-  else { chatSay(AGENTS[key],t('chat.erased')); ghost=null; $('#proposalBar').classList.remove('show'); paintAll(); } }
-$('#acceptBtn').onclick=()=>clearGhost(true); $('#rejectBtn').onclick=()=>clearGhost(false);
-$$('.agentBtn').forEach(b=>b.onclick=()=>{ if(!loop) return; ({beat:propBeat,k808:prop808,hook:propHook,flow:propFlow})[b.dataset.agent](); });
-function propBeat(){ const g=mk(5), style=pick(['trap','boom']);
-  if(style==='trap'){ [0,6,10].forEach(s=>g[0][s]=true); [4,12].forEach(s=>g[2][s]=true);
-    for(let s=0;s<16;s++) if(s%2===0||rng()<.4) g[3][s]=true; if(rng()<.7){[6,7,14,15].forEach(s=>g[3][s]=true);} }
-  else { [0,7,10].forEach(s=>g[0][s]=true); [4,12].forEach(s=>g[1][s]=true); for(let s=0;s<16;s+=2)g[3][s]=true; }
-  setGhost('drums',g,'beat', style==='trap'?t('chat.beatTrap'):t('chat.beatBoom')); }
-function prop808(){ const g=mk(6), roots=curMoodRoots(); for(let s=0;s<STEPS;s+=4){ const row=roots[(s/4)%roots.length];
-  g[row][s]=true; if(rng()<.6){ for(let k=1;k<pick([2,3,4]);k++) if(s+k<16) g[row][s+k]=true; } }
-  setGhost('k808',g,'k808',t('chat.bass808')); }
-function propHook(){ const g=mk(8); let row=pick([2,3,4]);
-  for(let s=0;s<STEPS;s++){ const strong=s%4===0;
-    if(strong&&rng()<.85){ row=Math.max(0,Math.min(7,row+pick([-2,-1,0,1,2]))); g[row][s]=true; }
-    else if(!strong&&rng()<.3){ row=Math.max(0,Math.min(7,row+pick([-1,1]))); g[row][s]=true; } }
-  setGhost('keys',g,'hook',t('chat.hook')); }
-function propFlow(){ const g=mk(1); pick([[0,3,4,7,8,11,12,14],[0,2,4,6,8,10,12,14],[0,3,6,8,11,14]]).forEach(s=>g[0][s]=true);
-  setGhost('bars',g,'flow',t('chat.flow')); }
-function curMoodRoots(){ return st.mood==='dark'?[5,3,1,0]:[5,4,2,0]; }
-
-/* ================= @Arranger — ghost variant NODES ================= */
+/* ================= variant generator (honest local tool — no agent role-play) =================
+   "✨ Variants" branches the selected section into two ghost variant nodes you
+   preview and keep/erase. It's a plain generator, not attributed to any agent —
+   real agents show up only in the feed + op history via the real API. */
+let ghost=null;   // pattern-ghost overlay retired; kept null for paint/playback checks
 const VARIANTS=[{kind:'variation'},{kind:'lift'},{kind:'break'}];
 function vSuffix(k){ return t('variant.'+(k==='break'?'brk':k)); }
-function vDesc(k){ return t('variant.'+(k==='variation'?'varDesc':k==='lift'?'liftDesc':'brkDesc')); }
 $('#arrangeBtn').onclick=()=>{ if(!loop) return; const base=selNode(); if(!base||base.ghost){ toast(t('toast.pickSection')); return; }
   const defs=[...VARIANTS].sort(()=>rng()-.5).slice(0,2);
   defs.forEach((d,i)=>{ const v=addNode(mutate(base.state,d.kind),
       Math.min(base.x+170, gArea.clientWidth-140), Math.max(0,Math.min(gArea.clientHeight-70, base.y+(i?90:-90))),
       {ghost:true, reps:base.reps, k:'variant', vkind:d.kind, baseK:base.k, baseLetter:base.letter, baseName:base.name});
     graph.edges.push({from:base.id, to:v.id}); });
-  renderGraph(); chatSay(AGENTS.arranger, t('chat.arrange',{name:dispName(base), list:defs.map(d=>vSuffix(d.kind).trim()+'('+vDesc(d.kind)+')').join(i18next.language==='zh'?'；':'; ')}));
+  renderGraph(); toast(t('toast.variantsAdded'));
   op('arrange',{node:dispName(base), variants:defs.map(d=>vSuffix(d.kind).trim())}); };
 function mutate(s,kind){ const n=JSON.parse(JSON.stringify(s));
   if(kind==='lift'){ const k=n.grids.keys; for(let r=n.grids.keys.length-1;r>0;r--) k[r]=k[r-1].slice(); k[0]=Array(STEPS).fill(false);
@@ -467,10 +434,9 @@ function mutate(s,kind){ const n=JSON.parse(JSON.stringify(s));
   else { const k=n.grids.keys; for(let r=0;r<k.length;r++) for(let c=0;c<STEPS;c++) if(k[r][c]&&rng()<.5){ k[r][c]=false; const nr=Math.max(0,Math.min(7,r+pick([-1,1]))); k[nr][c]=true; }
     for(let c=1;c<16;c+=4) if(rng()<.6) n.grids.drums[3][c]=true; }
   return n; }
-function acceptGhostNode(id){ const n=nodeById(id); if(!n) return; n.ghost=false; renderGraph();
-  chatSay(AGENTS.arranger,t('chat.nodeIn',{name:dispName(n)})); op('add_node',{node:dispName(n), via:'@Arranger'}); }
+function acceptGhostNode(id){ const n=nodeById(id); if(!n) return; n.ghost=false; renderGraph(); op('add_node',{node:dispName(n)}); }
 function rejectGhostNode(id){ const n=nodeById(id); graph.nodes=graph.nodes.filter(x=>x.id!==id);
-  graph.edges=graph.edges.filter(e=>e.from!==id&&e.to!==id); renderGraph(); chatSay(AGENTS.arranger,t('chat.erased')); }
+  graph.edges=graph.edges.filter(e=>e.from!==id&&e.to!==id); renderGraph(); }
 
 /* ================= per-song history ================= */
 const HIDDEN_OPS = new Set(['move','update_graph']);
@@ -685,7 +651,6 @@ window.onLangChange = function(){
   $('#publishBtn').textContent = loop.published? t('board.published') : t('board.publish');
   selectNode(selId, {silent:true});   // node name + board in new language
   renderGraph(); refreshOps(); refreshFeed();
-  $('#chat').innerHTML=''; chatSys(t('chat.ready')); chatSay(AGENTS.beat, t('crew.greet'));
 };
 $('#langBtn').addEventListener('click', ()=>{ toggleLang(); });
 
@@ -700,8 +665,6 @@ async function boot(){
   const mine=ls.find(l=>l.authorId===RAP.actor.id);
   if(mine){ const full=await API.getLoop(mine.id); useLoop(full); } else { await newSong(); }
   refreshFeed();
-  chatSys(t('chat.ready'));
-  chatSay(AGENTS.beat,t('crew.greet'));
 }
 async function seedIfEmpty(){ const ls=await API.listLoops(); if(ls.length) return;
   const prev=RAP.actor;
