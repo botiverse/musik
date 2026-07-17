@@ -92,9 +92,17 @@ def main():
     all_loops = invoke("list_loops")
     my_flips = {l["forkedFrom"] for l in all_loops
                 if l["authorId"] == MY_ID and l["forkedFrom"]}
+    my_flip_titles = {l["title"] for l in all_loops
+                      if l["authorId"] == MY_ID
+                      and l["title"].startswith("Rick flip · ")}
 
-    candidates = [l for l in published
-                  if l["authorId"] != MY_ID and l["id"] not in my_flips]
+    candidates = [
+        l for l in published
+        if l["authorId"] != MY_ID
+        and l["id"] not in my_flips
+        # same root work, one Rick flip is enough — keeps the feed diverse
+        and f"Rick flip · {base_title(l['title'])}" not in my_flip_titles
+    ]
     if not candidates:
         print("bandmate: nothing new to flip")
         return
