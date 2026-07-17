@@ -53,6 +53,7 @@ const API = (function(){
       method, headers,
       body: body!=null ? JSON.stringify(body) : undefined
     });
+    if(r.status===401 && window.onAuthExpired) window.onAuthExpired();   // session dropped — surface it, don't fall silent
     if(!r.ok){ throw new Error('API '+method+' '+path+' → '+r.status); }
     return r.status===204 ? null : r.json();
   }

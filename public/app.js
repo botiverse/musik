@@ -33,6 +33,7 @@ function useLoop(rec){
   $('#publishBtn').textContent = loop.published? t('board.published') : t('board.publish');
   $('#publishBtn').classList.toggle('on', !!loop.published);
   syncAlignUI();
+  panX=0; panY=0;                      // reset graph view on load
   selectNode(selId, {silent:true});
   renderGraph(); refreshOps();
 }
@@ -232,7 +233,7 @@ function renderGraph(){
   [...gArea.querySelectorAll('.gnode')].forEach(n=>n.remove());
   graph.nodes.forEach(n=>{
     const el=document.createElement('div'); el.className='gnode'+(n.id===selId?' selected':'')+(n.id===graph.startId?' startNode':'')+(n.ghost?' ghostNode':'');
-    el.style.left=n.x+'px'; el.style.top=n.y+'px'; el.dataset.id=n.id;
+    el.style.left=(n.x+panX)+'px'; el.style.top=(n.y+panY)+'px'; el.dataset.id=n.id;
     const cv=document.createElement('canvas'); drawThumb(cv, n.state); el.appendChild(cv);
     const nm=document.createElement('div'); nm.className='nname'; nm.textContent=dispName(n); if(!n.ghost) nm.title=t('node.renameHint'); el.appendChild(nm);
     if(n.ghost){
@@ -275,37 +276,45 @@ function renderNodeThumb(id){ const el=gArea.querySelector(`.gnode[data-id="${id
 function setActiveNode(id){ [...gArea.querySelectorAll('.gnode')].forEach(el=>el.classList.toggle('activeNode', el.dataset.id===id)); }
 
 /* graph interactions: select, drag-move, edge-drag, controls */
-let dragging=null, edgeDrag=null;
+let dragging=null, edgeDrag=null, panning=null;
+let panX=0, panY=0;   // graph viewport offset (drag empty area to pan)
+function applyPan(){ graph.nodes.forEach(n=>{ const el=gArea.querySelector(`.gnode[data-id="${n.id}"]`);
+    if(el){ el.style.left=(n.x+panX)+'px'; el.style.top=(n.y+panY)+'px'; } }); renderEdges(); }
 gArea.addEventListener('pointerdown',e=>{
   const port=e.target.closest('.port');
   if(port){ e.preventDefault(); edgeDrag={from:port.dataset.port}; return; }
-  const node=e.target.closest('.gnode'); if(!node) return;
+  const node=e.target.closest('.gnode');
+  if(!node){                                  // empty area → pan the canvas
+    e.preventDefault(); panning={sx:e.clientX, sy:e.clientY, ox:panX, oy:panY}; gArea.style.cursor='grabbing'; return;
+  }
   if(e.target.closest('button')||e.target.closest('.nx')) return;
   const n=nodeById(node.dataset.id);
   if(n.ghost){ selectNode(n.id); return; }
   selectNode(n.id);
-  const r=gArea.getBoundingClientRect(); const ox=e.clientX-r.left-n.x, oy=e.clientY-r.top-n.y;
+  const r=gArea.getBoundingClientRect(); const ox=e.clientX-r.left-(n.x+panX), oy=e.clientY-r.top-(n.y+panY);
   dragging={id:n.id, ox, oy, moved:false};
 });
 window.addEventListener('pointermove',e=>{
+  if(panning){ panX=panning.ox+(e.clientX-panning.sx); panY=panning.oy+(e.clientY-panning.sy); applyPan(); return; }
   if(dragging){ const n=nodeById(dragging.id); const r=gArea.getBoundingClientRect();
-    n.x=Math.max(0,Math.min(gArea.clientWidth-136, e.clientX-r.left-dragging.ox));
-    n.y=Math.max(0,Math.min(gArea.clientHeight-70, e.clientY-r.top-dragging.oy));
+    n.x=e.clientX-r.left-dragging.ox-panX;
+    n.y=e.clientY-r.top-dragging.oy-panY;
     dragging.moved=true;
-    const el=gArea.querySelector(`.gnode[data-id="${n.id}"]`); if(el){ el.style.left=n.x+'px'; el.style.top=n.y+'px'; }
+    const el=gArea.querySelector(`.gnode[data-id="${n.id}"]`); if(el){ el.style.left=(n.x+panX)+'px'; el.style.top=(n.y+panY)+'px'; }
     renderEdges();
   }
 });
 window.addEventListener('pointerup',e=>{
+  if(panning){ panning=null; gArea.style.cursor=''; }
   if(edgeDrag){ const node=document.elementFromPoint(e.clientX,e.clientY)?.closest('.gnode');
     if(node && node.dataset.id!==edgeDrag.from){ addEdge(edgeDrag.from, node.dataset.id); } edgeDrag=null; }
   if(dragging){ if(dragging.moved) op('move',{node:dispName(nodeById(dragging.id))}); dragging=null; }
 });
-gArea.addEventListener('dblclick',e=>{  // double-click a node's name to rename it
+gArea.addEventListener('dblclick',e=>{  // double-click a node's name to rename it inline
   const nm=e.target.closest('.nname'); if(!nm) return;
-  const node=nm.closest('.gnode'); if(node){ e.stopPropagation(); renameNode(node.dataset.id); } });
+  const node=nm.closest('.gnode'); if(node){ e.stopPropagation(); renameNode(node.dataset.id, nm); } });
 $('#nodeName').style.cursor='text'; $('#nodeName').title=t('node.renameHint');
-$('#nodeName').addEventListener('dblclick', ()=>{ if(loop && selNode() && !selNode().ghost) renameNode(selId); });
+$('#nodeName').addEventListener('dblclick', ()=>{ if(loop && selNode() && !selNode().ghost) renameNode(selId, $('#nodeName')); });
 gArea.addEventListener('click',e=>{
   const acc=e.target.dataset?.acc, rej=e.target.dataset?.rej, del=e.target.dataset?.del,
         reps=e.target.dataset?.reps, play=e.target.dataset?.play, start=e.target.dataset?.start,
@@ -337,36 +346,45 @@ function dispBase(n){
   return n.baseName||'';
 }
 /* rename the whole track (loop title) — backend title PATCH (author only) */
-async function renameLoopUI(){
-  if(!loop) return;
-  const v=prompt(t('loop.renamePrompt'), loop.title);
-  if(v===null) return;
-  const title=v.trim().slice(0,120);
-  if(!title || title===loop.title) return;
-  try{
-    const rec=await API.renameLoop(loop.id, title);
-    loop.title=(rec&&rec.title)||title;
-    $('#songTitle').textContent=loop.title;
-    refreshOps(); refreshFeed();
-  }catch(e){
-    if(/→ 403/.test(e.message)) toast(t('toast.notYours'));
-    else toast(t('toast.saveFail',{err:e.message}));
-  }
+/* in-page inline edit: swap an element for an <input>, commit on Enter/blur,
+   cancel on Escape — no native prompt() dialogs */
+function inlineEdit(el, current, opts, commit){
+  if(el.dataset.editing) return;
+  const input=document.createElement('input');
+  input.className='inlineEdit '+(opts.cls||''); input.value=current; input.maxLength=opts.max||60;
+  el.dataset.editing='1'; el.replaceWith(input); input.focus(); input.select();
+  let done=false;
+  const finish=(save)=>{ if(done) return; done=true;
+    const v=input.value.trim(); input.replaceWith(el); delete el.dataset.editing;
+    if(save && v && v!==current) commit(v); };
+  input.addEventListener('keydown',e=>{ e.stopPropagation();
+    if(e.key==='Enter'){ e.preventDefault(); finish(true); }
+    else if(e.key==='Escape'){ e.preventDefault(); finish(false); } });
+  input.addEventListener('blur',()=>finish(true));
 }
-$('#renameLoopBtn').onclick=renameLoopUI;
-$('#songTitle').addEventListener('dblclick', renameLoopUI);
+/* rename the whole track (loop title) — inline edit → backend title PATCH */
+function startLoopTitleEdit(){
+  if(!loop) return;
+  inlineEdit($('#songTitle'), loop.title||'', {max:120, cls:'big'}, async(v)=>{
+    try{ const rec=await API.renameLoop(loop.id, v); loop.title=(rec&&rec.title)||v;
+      $('#songTitle').textContent=loop.title; refreshOps(); refreshFeed(); }
+    catch(e){ $('#songTitle').textContent=loop.title;
+      if(/→ 403/.test(e.message)) toast(t('toast.notYours')); else toast(t('toast.saveFail',{err:e.message})); }
+  });
+}
+$('#renameLoopBtn').onclick=startLoopTitleEdit;
+$('#songTitle').addEventListener('dblclick', startLoopTitleEdit);
 
 /* rename a section — sets a custom name (dispName prefers it), persists in graph */
-function renameNode(id){
+function renameNode(id, el){
   const n=nodeById(id); if(!n || n.ghost) return;
   const cur=dispName(n);
-  const v=prompt(t('node.renamePrompt'), cur);
-  if(v===null) return;
-  const name=v.trim().slice(0,40);
-  if(!name || name===cur) return;
-  n.custom=true; n.name=name;
-  selectNode(selId,{silent:true}); renderGraph();
-  op('rename',{node:name, from:cur});
+  const target = el || $('#nodeName');
+  inlineEdit(target, cur, {max:40}, (v)=>{
+    n.custom=true; n.name=v;
+    selectNode(selId,{silent:true}); renderGraph();
+    op('rename',{node:v, from:cur});
+  });
 }
 function addNode(state, x, y, opts={}){
   graph.counter=(graph.counter||graph.nodes.length)+1;
@@ -605,6 +623,8 @@ function randomState(){
 
 /* ================= identity (Login-with-Raft) ================= */
 const TOKEN_KEY='rap.token';
+/* token expired mid-session → show a clear re-login bar instead of failing silently */
+window.onAuthExpired = function(){ const b=document.getElementById('sessionBar'); if(b) b.classList.add('show'); };
 async function resolveIdentity(){ if(API.MOCK) return true;
   const params=new URLSearchParams(location.search); const tok=localStorage.getItem(TOKEN_KEY); if(tok) RAP.token=tok;
   const devMode=!!(params.get('dev'));
