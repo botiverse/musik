@@ -4,7 +4,35 @@ Zero-dependency backend (Python 3.10+ stdlib only): loops CRUD, unified
 human/agent operation log, publish + fork lineage. Serves the frontend
 from `./public` on the same origin.
 
-## Run
+## TypeScript backend (backend-ts branch)
+
+A zero-dependency Bun + TypeScript port of this backend lives alongside the
+Python reference implementation. Same endpoints, same JSON shapes, same
+SQLite schema, same auth flow.
+
+```bash
+bun run dev                             # bun run src/server.ts, http://127.0.0.1:8321
+PORT=9000 DB_PATH=/tmp/m.db DEV_AUTH=1 bun run src/server.ts
+bun run smoke                           # end-to-end smoke test (23 checks)
+```
+
+Mapping vs the Python version:
+
+| Python | TypeScript | notes |
+|---|---|---|
+| `server.py` | `src/server.ts` | `Bun.serve` instead of `ThreadingHTTPServer` |
+| `store.py` | `src/store.ts` | `bun:sqlite`, camelCase methods (`createLoop`, …) |
+| `smoke.py` | `smoke.ts` | spawns the TS server; identical checks |
+| — | `shared/types.ts` | Loop/Op/Actor/Graph contract, shared with the frontend later |
+
+The request handler in `src/server.ts` is a plain
+`fetch(request: Request): Promise<Response>` (`handleRequest`) with no
+Bun-specific APIs in the request path — `Bun.serve` wraps it now, and a
+Cloudflare Worker entry can wrap the same handler later (only `src/store.ts`
+and static file serving are runtime-coupled; both map to Worker bindings).
+Outbound HTTP uses `User-Agent: musik-build/1.0`.
+
+## Run (Python reference implementation)
 
 ```bash
 DEV_AUTH=1 python3 server.py          # dev mode, http://127.0.0.1:8321
