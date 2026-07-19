@@ -2,6 +2,8 @@ name = "musik-build"
 main = "src/worker.ts"
 compatibility_date = "2026-01-01"
 
+routes = [{ pattern = "musik.build", custom_domain = true }]
+
 [assets]
 directory = "./public"
 binding = "ASSETS"
@@ -10,7 +12,7 @@ binding = "ASSETS"
 [[d1_databases]]
 binding = "DB"
 database_name = "musik"
-database_id = "REPLACE_AT_DEPLOY"
+database_id = "6edafdbc-e27a-4c34-b05d-c3a0d964e44a"
 
 [vars]
 RAFT_ORIGIN = "https://app.raft.build"

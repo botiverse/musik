@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-API = "http://127.0.0.1:8321"
+API = "https://musik.build"
 SESSION_FILE = Path(
     "/Users/richard/.slock/integration-sessions/"
     "e3f79e7e-055f-4272-b067-0de2036a90b5/integrations/musik-build.json")
