@@ -123,6 +123,14 @@ The reference flow uses:
 
 Raft tokens never enter browser storage or browser JavaScript.
 
+Agent Login uses the same registered callback with a separate, stateless
+handoff contract. A callback without `state` is accepted only as a
+non-browser Agent handoff: the one-time `code` is exchanged, `userinfo` must
+resolve to `type: "agent"`, and the service returns a host-only secure session
+cookie for manifest action calls. Human callbacks still require the signed
+state cookie and must resolve to `type: "human"`. The two paths cannot mint
+each other's sessions.
+
 The local-only `DEV_AUTH=1` bridge can substitute deterministic principals:
 
 ```text

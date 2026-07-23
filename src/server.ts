@@ -362,8 +362,20 @@ function canonicalOrigin(config: ServerConfig, request: Request): string {
   return new URL(request.url).origin;
 }
 
-function cookie(value: string, maxAge: number): string {
-  return `${value}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
+function cookie(
+  value: string,
+  maxAge: number,
+  sameSite: "Lax" | "Strict" = "Lax",
+): string {
+  return `${value}; Path=/; Secure; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAge}`;
+}
+
+function isBrowserNavigation(request: Request): boolean {
+  return (
+    request.headers.get("sec-fetch-mode")?.toLowerCase() === "navigate" ||
+    request.headers.get("sec-fetch-dest")?.toLowerCase() === "document" ||
+    /^mozilla\/5\.0\b/i.test(request.headers.get("user-agent") ?? "")
+  );
 }
 
 export function createHandler(
@@ -734,21 +746,12 @@ export function createHandler(
     return redirect(setup.toString(), 302, headers);
   }
 
-  async function loginCallback(request: Request, url: URL): Promise<Response> {
-    if (!loginReady()) return sendHtml(503, "<p>Login is not configured.</p>");
-    const headers = new Headers();
-    headers.append("Set-Cookie", cookie(`${LOGIN_STATE_COOKIE}=`, 0));
-    const state = readCookie(request, LOGIN_STATE_COOKIE);
-    const returnedState = url.searchParams.get("state");
-    if (
-      !state ||
-      returnedState !== state ||
-      !(await verifyLoginState(state, config.sessionSecret))
-    ) {
-      return sendHtml(400, "<p>Login state is missing or expired. Start again from musik.build.</p>", headers);
-    }
-    const code = url.searchParams.get("code") ?? "";
-    if (!code) return sendHtml(400, "<p>Missing Raft callback code.</p>", headers);
+  async function exchangeLoginCode(
+    code: string,
+  ): Promise<
+    | { ok: true; accessToken: string; maxAge: number }
+    | { ok: false; upstreamStatus: number | null }
+  > {
     let tokenResponse: Response;
     try {
       tokenResponse = await fetchImpl(`${config.raftApiOrigin}/api/oauth/token`, {
@@ -762,37 +765,105 @@ export function createHandler(
         signal: AbortSignal.timeout(8000),
       });
     } catch {
-      return sendHtml(502, "<p>Raft token exchange failed.</p>", headers);
+      return { ok: false, upstreamStatus: null };
     }
-    if (!tokenResponse.ok) return sendHtml(502, "<p>Raft token exchange failed.</p>", headers);
+    if (!tokenResponse.ok) {
+      return { ok: false, upstreamStatus: tokenResponse.status };
+    }
     let tokenBody: Record<string, unknown>;
     try {
       const parsed = await tokenResponse.json();
       if (!isPlainObject(parsed)) throw new Error("bad token response");
       tokenBody = parsed;
     } catch {
-      return sendHtml(502, "<p>Raft token exchange failed.</p>", headers);
+      return { ok: false, upstreamStatus: tokenResponse.status };
     }
     if (typeof tokenBody.access_token !== "string" || !tokenBody.access_token) {
-      return sendHtml(502, "<p>Raft token exchange failed.</p>", headers);
-    }
-    if (!(await fetchUserinfo(tokenBody.access_token))) {
-      return sendHtml(502, "<p>Raft userinfo failed.</p>", headers);
+      return { ok: false, upstreamStatus: tokenResponse.status };
     }
     const rawExpires = Number(tokenBody.expires_in ?? 3600);
-    const maxAge = Math.min(Math.max(Number.isFinite(rawExpires) ? Math.trunc(rawExpires) : 3600, 60), 86400);
+    const maxAge = Math.min(
+      Math.max(Number.isFinite(rawExpires) ? Math.trunc(rawExpires) : 3600, 60),
+      86400,
+    );
+    return { ok: true, accessToken: tokenBody.access_token, maxAge };
+  }
+
+  async function createLoginSession(accessToken: string, maxAge: number): Promise<string> {
     const sessionId = crypto.randomUUID().replaceAll("-", "");
     await store.createSession({
       id: sessionId,
-      tokenCiphertext: await encryptAccessToken(tokenBody.access_token, config.sessionSecret),
+      tokenCiphertext: await encryptAccessToken(accessToken, config.sessionSecret),
       expiresAt: Math.floor(Date.now() / 1000) + maxAge,
     });
     await store.pruneSecurityState(Math.floor(Date.now() / 1000));
+    return sessionId;
+  }
+
+  async function loginCallback(request: Request, url: URL): Promise<Response> {
+    if (!loginReady()) return sendHtml(503, "<p>Login is not configured.</p>");
+    if (!url.searchParams.has("state")) {
+      return agentLoginCallback(request, url);
+    }
+    const headers = new Headers();
+    headers.append("Set-Cookie", cookie(`${LOGIN_STATE_COOKIE}=`, 0));
+    const state = readCookie(request, LOGIN_STATE_COOKIE);
+    const returnedState = url.searchParams.get("state");
+    if (
+      !state ||
+      returnedState !== state ||
+      !(await verifyLoginState(state, config.sessionSecret))
+    ) {
+      return sendHtml(400, "<p>Login state is missing or expired. Start again from musik.build.</p>", headers);
+    }
+    const code = url.searchParams.get("code") ?? "";
+    if (!code) return sendHtml(400, "<p>Missing Raft callback code.</p>", headers);
+    const exchanged = await exchangeLoginCode(code);
+    if (!exchanged.ok) {
+      return sendHtml(502, "<p>Raft token exchange failed.</p>", headers);
+    }
+    const actor = await fetchUserinfo(exchanged.accessToken);
+    if (!actor) {
+      return sendHtml(502, "<p>Raft userinfo failed.</p>", headers);
+    }
+    if (actor.kind !== "human") {
+      return sendHtml(403, "<p>Browser login requires a Human Raft identity.</p>", headers);
+    }
+    const sessionId = await createLoginSession(exchanged.accessToken, exchanged.maxAge);
     headers.append(
       "Set-Cookie",
-      cookie(`${SESSION_COOKIE}=${encodeURIComponent(sessionId)}`, maxAge),
+      cookie(`${SESSION_COOKIE}=${encodeURIComponent(sessionId)}`, exchanged.maxAge),
     );
     return redirect("/", 303, headers);
+  }
+
+  async function agentLoginCallback(request: Request, url: URL): Promise<Response> {
+    if (isBrowserNavigation(request)) {
+      return sendHtml(403, "<p>Agent Login callback handoffs are not browser pages.</p>");
+    }
+    const code = url.searchParams.get("code") ?? "";
+    if (!code) return sendHtml(400, "<p>Missing Raft callback code.</p>");
+    const exchanged = await exchangeLoginCode(code);
+    if (!exchanged.ok) {
+      const status = exchanged.upstreamStatus === 400 ? 409 : 502;
+      return sendHtml(status, "<p>Raft Agent Login handoff failed.</p>");
+    }
+    const actor = await fetchUserinfo(exchanged.accessToken);
+    if (!actor) return sendHtml(502, "<p>Raft userinfo failed.</p>");
+    if (actor.kind !== "agent") {
+      return sendHtml(403, "<p>Agent Login requires an Agent Raft identity.</p>");
+    }
+    const sessionId = await createLoginSession(exchanged.accessToken, exchanged.maxAge);
+    const headers = new Headers();
+    headers.append(
+      "Set-Cookie",
+      cookie(
+        `${SESSION_COOKIE}=${encodeURIComponent(sessionId)}`,
+        exchanged.maxAge,
+        "Strict",
+      ),
+    );
+    return withSecurityHeaders(new Response(null, { status: 204, headers }));
   }
 
   function manifest(origin: string) {

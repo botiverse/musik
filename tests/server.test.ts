@@ -447,9 +447,6 @@ test("login uses canonical Raft setup and an opaque HttpOnly app session", async
   const state = decodeURIComponent(statePair.slice(statePair.indexOf("=") + 1));
   assert.equal(location.searchParams.get("state"), state);
 
-  const withoutState = await handler(request("/login/raft/callback?code=abc"));
-  assert.equal(withoutState.status, 400);
-
   const wrongState = await handler(
     request("/login/raft/callback?code=abc&state=wrong", { headers: { Cookie: statePair } }),
   );
@@ -475,6 +472,122 @@ test("login uses canonical Raft setup and an opaque HttpOnly app session", async
   assert.equal((await handler(request("/api/me", { headers: { Cookie: sessionPair } }))).status, 200);
   assert.equal((await handler(request("/api/me", { headers: { Cookie: sessionPair } }))).status, 200);
   assert.equal(userinfoCalls, 3);
+});
+
+test("Agent Login consumes a stateless one-time handoff into a strict app session", async () => {
+  let tokenCalls = 0;
+  let userinfoCalls = 0;
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/api/oauth/token")) {
+      tokenCalls += 1;
+      const body = JSON.parse(String(init?.body));
+      assert.deepEqual(body, {
+        grant_type: "authorization_code",
+        code: "agent-request",
+      });
+      if (tokenCalls > 1) {
+        return Response.json({ error: "request already consumed" }, { status: 400 });
+      }
+      assert.match(String(new Headers(init?.headers).get("authorization")), /^Basic /);
+      return Response.json({ access_token: "agent-secret-token", expires_in: 900 });
+    }
+    if (url.endsWith("/api/oauth/userinfo")) {
+      userinfoCalls += 1;
+      assert.equal(
+        new Headers(init?.headers).get("authorization"),
+        "Bearer agent-secret-token",
+      );
+      return Response.json({
+        sub: "agent-1",
+        type: "agent",
+        name: "Beat Agent",
+        preferred_username: "beat-agent",
+      });
+    }
+    return new Response("not found", { status: 404 });
+  };
+  const store = new MemoryStore();
+  const handler = createHandler(config(fetchImpl), store);
+
+  const missingCode = await handler(request("/login/raft/callback"));
+  assert.equal(missingCode.status, 400);
+  assert.equal(tokenCalls, 0);
+
+  const browserNavigation = await handler(
+    request("/login/raft/callback?code=agent-request", {
+      headers: { "User-Agent": "Mozilla/5.0" },
+    }),
+  );
+  assert.equal(browserNavigation.status, 403);
+  assert.equal(tokenCalls, 0);
+
+  const callback = await handler(
+    request("/login/raft/callback?code=agent-request", {
+      headers: { Accept: "text/html,application/json" },
+    }),
+  );
+  assert.equal(callback.status, 204);
+  const sessionCookie = callback.headers
+    .getSetCookie()
+    .find((value) => value.startsWith("__Host-musik_session="));
+  assert.ok(sessionCookie);
+  assert.match(sessionCookie!, /HttpOnly/);
+  assert.match(sessionCookie!, /Secure/);
+  assert.match(sessionCookie!, /SameSite=Strict/);
+  assert.doesNotMatch(sessionCookie!, /agent-secret-token/);
+  assert.equal(store.sessions.size, 1);
+  assert.doesNotMatch([...store.sessions.values()][0].tokenCiphertext, /agent-secret-token/);
+
+  const sessionPair = sessionCookie!.split(";")[0];
+  const me = await handler(request("/api/me", { headers: { Cookie: sessionPair } }));
+  assert.equal(me.status, 200);
+  assert.equal((await json(me)).kind, "agent");
+  assert.equal(userinfoCalls, 2);
+
+  const replay = await handler(request("/login/raft/callback?code=agent-request"));
+  assert.equal(replay.status, 409);
+  assert.equal(store.sessions.size, 1);
+});
+
+test("browser and Agent Login callbacks reject the wrong principal type", async () => {
+  let principalType: Actor["kind"] = "human";
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url.endsWith("/api/oauth/token")) {
+      return Response.json({ access_token: "context-token", expires_in: 900 });
+    }
+    if (url.endsWith("/api/oauth/userinfo")) {
+      return Response.json({
+        sub: "context-principal",
+        type: principalType,
+        name: "Context Principal",
+      });
+    }
+    return new Response("not found", { status: 404 });
+  };
+  const store = new MemoryStore();
+  const handler = createHandler(config(fetchImpl), store);
+
+  const humanThroughAgentHandoff = await handler(
+    request("/login/raft/callback?code=human-request"),
+  );
+  assert.equal(humanThroughAgentHandoff.status, 403);
+  assert.equal(store.sessions.size, 0);
+
+  const login = await handler(request("/login"));
+  const stateCookie = login.headers.get("set-cookie")!;
+  const statePair = stateCookie.split(";")[0];
+  const state = decodeURIComponent(statePair.slice(statePair.indexOf("=") + 1));
+  principalType = "agent";
+  const agentThroughBrowserCallback = await handler(
+    request(
+      `/login/raft/callback?code=agent-request&state=${encodeURIComponent(state)}`,
+      { headers: { Cookie: statePair } },
+    ),
+  );
+  assert.equal(agentThroughBrowserCallback.status, 403);
+  assert.equal(store.sessions.size, 0);
 });
 
 test("malformed session cookies fail closed before persistence lookup", async () => {
