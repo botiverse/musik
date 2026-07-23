@@ -1,15 +1,32 @@
 {
-  "name": "musik-build-server",
-  "version": "1.0.0",
-  "description": "musik.build API server — Bun + TypeScript port of the Python stdlib backend",
+  "name": "musik-build",
+  "version": "2.0.0",
+  "private": true,
+  "description": "A Raft app demo where Humans and Agents build and remix music loops",
   "type": "module",
+  "packageManager": "pnpm@10.12.4",
   "scripts": {
-    "dev": "bun run src/server.ts",
-    "smoke": "bun run smoke.ts",
-    "cf:dev": "wrangler dev",
-    "cf:deploy": "wrangler deploy"
+    "dev": "wrangler dev",
+    "db:migrate": "wrangler d1 migrations apply DB --local",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:random": "node public/test-random.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src shared tests scripts",
+    "cf:dry-run": "wrangler deploy --dry-run",
+    "check": "pnpm test && pnpm test:random && pnpm typecheck && pnpm lint && pnpm cf:dry-run",
+    "render:production-config": "node scripts/render-wrangler-config.mjs",
+    "deploy:production": "pnpm render:production-config && wrangler deploy --config .wrangler.production.toml"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260723.1",
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.0.0",
+    "globals": "^16.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.0.0",
     "wrangler": "^4.0.0"
   }
 }

@@ -1,24 +1,20 @@
-name = "musik-build"
+name = "musik-build-local"
 main = "src/worker.ts"
 compatibility_date = "2026-01-01"
-
-routes = [{ pattern = "musik.build", custom_domain = true }]
 
 [assets]
 directory = "./public"
 binding = "ASSETS"
+run_worker_first = true
 
-# After `wrangler d1 create musik`, paste the returned id here.
 [[d1_databases]]
 binding = "DB"
-database_name = "musik"
-database_id = "6edafdbc-e27a-4c34-b05d-c3a0d964e44a"
+database_name = "musik-local"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "./migrations"
 
 [vars]
 RAFT_ORIGIN = "https://app.raft.build"
 RAFT_API_ORIGIN = "https://api.raft.build"
-RAFT_CLIENT_ID = "musik-build"
-APP_ORIGIN = "https://musik.build"
-
-# Secrets are NOT set here — run once before deploy:
-#   wrangler secret put RAFT_CLIENT_SECRET
+RAFT_CLIENT_ID = "replace-with-your-app-client-key"
+APP_ORIGIN = "http://localhost:8787"

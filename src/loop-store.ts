@@ -1,43 +1,73 @@
-/** Runtime-neutral store contract + helpers shared by the bun:sqlite store
- *  (src/store.ts) and the Cloudflare D1 store (src/store-d1.ts).
+/** Runtime-neutral store contract and row-mapping helpers.
  *
- *  This module must stay free of runtime-specific imports (no bun:sqlite,
- *  no node:*, no D1 types) so both store implementations and the Worker
- *  entry can import it.
+ * This module stays free of D1-specific types so the handler can use a
+ * focused in-memory test implementation.
  */
 
 import type { Actor, Graph, Loop, Op } from "../shared/types";
 
-/** Async persistence interface for loops and the operation log.
- *  Implementations: Store (bun:sqlite, sync driver under async signatures)
- *  and D1LoopStore (Cloudflare D1). */
+export interface PageCursor {
+  at: string;
+  id: string;
+}
+
+export interface Page<T> {
+  items: T[];
+  nextCursor: PageCursor | null;
+}
+
+export interface SessionRecord {
+  id: string;
+  tokenCiphertext: string;
+  expiresAt: number;
+}
+
+export interface LoopListOptions {
+  publishedOnly: boolean;
+  ownerId?: string;
+  ownerKind?: Actor["kind"];
+  limit: number;
+  cursor?: PageCursor | null;
+}
+
+/** Async persistence interface for loops, operations, and app sessions. */
 export interface LoopStore {
   createLoop(title: string, graph: Graph, actor: Actor): Promise<Loop>;
   getLoop(loopId: string): Promise<Loop | null>;
-  listLoops(publishedOnly?: boolean): Promise<Loop[]>;
+  listLoops(options: LoopListOptions): Promise<Page<Loop>>;
+  countLoopsByAuthor(authorId: string, authorKind: Actor["kind"]): Promise<number>;
   updateGraph(
     loopId: string,
     graph: Graph | null,
     actor: Actor,
     action: string,
     payload: Record<string, any> | null,
+    expectedVersion: number,
     title?: string | null
-  ): Promise<Loop>;
-  publishLoop(loopId: string, actor: Actor): Promise<Loop>;
-  forkLoop(parent: Loop, actor: Actor, title: string | null): Promise<Loop>;
-  insertOp(
+  ): Promise<Loop | null>;
+  setPublished(
     loopId: string,
     actor: Actor,
-    action: string,
-    payload: Record<string, any> | null
-  ): Promise<Op>;
-  listOps(loopId: string): Promise<Op[]>;
-  recentOps(limit?: number): Promise<Op[]>;
+    published: boolean,
+    expectedVersion: number
+  ): Promise<Loop | null>;
+  forkLoop(parent: Loop, actor: Actor, title: string | null): Promise<Loop>;
+  listOps(loopId: string, limit: number, cursor?: PageCursor | null): Promise<Page<Op>>;
+  recentPublishedOps(limit: number, cursor?: PageCursor | null): Promise<Page<Op>>;
+  createSession(record: SessionRecord): Promise<void>;
+  getSession(sessionId: string): Promise<SessionRecord | null>;
+  deleteSession(sessionId: string): Promise<void>;
+  consumeRateLimit(
+    bucket: string,
+    subject: string,
+    limit: number,
+    windowSeconds: number,
+    nowSeconds: number
+  ): Promise<boolean>;
+  pruneSecurityState(nowSeconds: number): Promise<void>;
 }
 
-/** ISO-8601 UTC with milliseconds, in the same shape as Python's
- *  datetime.now(timezone.utc).isoformat(timespec="milliseconds")
- *  (e.g. 2026-07-17T09:48:54.384+00:00). */
+/** ISO-8601 UTC with milliseconds (for example 2026-07-17T09:48:54.384+00:00). */
 export function nowIso(): string {
   return new Date().toISOString().replace("Z", "+00:00");
 }
@@ -62,6 +92,7 @@ export function loopFromRow(row: any): Loop {
     forkRoot: row.fork_root,
     published: !!row.published,
     publishedAt: row.published_at,
+    version: Number(row.version ?? 1),
   };
 }
 

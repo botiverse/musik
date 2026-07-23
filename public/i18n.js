@@ -39,7 +39,8 @@ const I18N_RES = {
            empty:"No published pieces yet — make one and hit Publish 🌊",
            preview:"▶ Preview", stop:"■", flip:"↪ Flip", sections:"🧩 {{n}} sections", flipped:"↪ flipped" },
     footer:"musik.build",
-    login:{ blurb:"Make a loop. Share it. See who picks it up.", cta:"Login with Raft →" },
+    login:{ blurb:"Make a loop. Share it. See who picks it up.", cta:"Login with Raft →",
+            unavailable:"musik.build could not reach the service. Your work was not changed.", retry:"Retry" },
     node:{ verse:"A · Verse", chorus:"B · Chorus", section:"Section {{letter}}", flipSuffix:"flip", wordPrompt:"Write a word/syllable for beat {{n}}:", renamePrompt:"Rename this section:", renameHint:"Double-click to rename" },
     toast:{ newSong:"New song «{{title}}» 🎵", addSection:"Added section «{{name}}» 🧩", pickSection:"Select a section first",
             emptyCanvas:"It's empty — draw something first", variantsAdded:"Added two variants — preview them, then keep ✓ or erase ✗ on the graph", publishOk:"Published to Jam Feed 🌊", unpublishOk:"Removed from the feed",
@@ -94,7 +95,8 @@ const I18N_RES = {
            empty:"还没有发布的作品 —— 做一首然后点发布 🌊",
            preview:"▶ 试听", stop:"■", flip:"↪ 接力", sections:"🧩 {{n}} 段", flipped:"↪ 接力作品" },
     footer:"musik.build",
-    login:{ blurb:"做一段，分享出去，看谁接力。", cta:"Login with Raft →" },
+    login:{ blurb:"做一段，分享出去，看谁接力。", cta:"Login with Raft →",
+            unavailable:"musik.build 暂时无法连接服务，你的作品没有被修改。", retry:"重试" },
     node:{ verse:"A · 主歌", chorus:"B · 副歌", section:"段落 {{letter}}", flipSuffix:"接力版", wordPrompt:"给第 {{n}} 拍写一个词/音节：", renamePrompt:"给这段改个名字：", renameHint:"双击改名" },
     toast:{ newSong:"新建「{{title}}」🎵", addSection:"加了段落「{{name}}」🧩", pickSection:"先选一个段落",
             emptyCanvas:"还是空的 —— 先画点东西", variantsAdded:"接了两个变体——试听后在图上 ✓ 收下或 ✗ 擦掉", publishOk:"已发布到 Jam Feed 🌊", unpublishOk:"已从 Feed 撤下",
@@ -132,7 +134,7 @@ function detectLang(){
 function applyI18n(root){
   (root||document).querySelectorAll('[data-i18n]').forEach(el=>{
     const key=el.getAttribute('data-i18n');
-    if(el.hasAttribute('data-i18n-html')) el.innerHTML=t(key); else el.textContent=t(key);
+    el.textContent=t(key);
   });
   (root||document).querySelectorAll('[data-i18n-title]').forEach(el=>{
     el.setAttribute('title', t(el.getAttribute('data-i18n-title')));

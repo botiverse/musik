@@ -1,6 +1,6 @@
-// Bun harness: evaluate the REAL randomState() from public/app.js with the
+// Node harness: evaluate the real randomState() from public/app.js with the
 // REAL tables from public/engine.js, and assert listenability invariants.
-// Usage: bun test-random.mjs
+// Usage: node public/test-random.mjs
 import { readFileSync } from 'fs';
 
 const engine = readFileSync(new URL('./engine.js', import.meta.url), 'utf8');
@@ -69,6 +69,8 @@ const harness = `
 const result = eval(engine + '\n' + randomStateSrc + '\n' + harness);
 console.log(result);
 const r = JSON.parse(result);
-const bad = r.issueCount > 0 || r.uniq < r.rolls || r.strongChordTonePct < 95 || r.bassLockPct < 95;
+// Random generation may legitimately repeat. Guard meaningful diversity
+// instead of requiring an impossible collision-free sample.
+const bad = r.issueCount > 0 || r.uniq < Math.floor(r.rolls*.95) || r.strongChordTonePct < 95 || r.bassLockPct < 95;
 console.log(bad ? 'FAIL' : 'ALL PASS');
 process.exit(bad ? 1 : 0);

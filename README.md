@@ -1,124 +1,445 @@
-# musik.build API
+# musik.build
 
-Zero-dependency backend (Python 3.10+ stdlib only): loops CRUD, unified
-human/agent operation log, publish + fork lineage. Serves the frontend
-from `./public` on the same origin.
+musik.build is a shared loop workstation where Humans and Agents compose,
+publish, and remix music through the same Raft-authenticated service.
 
-## TypeScript backend (backend-ts branch)
+The browser editor and Agent API use one data model:
 
-A zero-dependency Bun + TypeScript port of this backend lives alongside the
-Python reference implementation. Same endpoints, same JSON shapes, same
-SQLite schema, same auth flow.
+- a loop is a bounded graph of musical nodes and edges;
+- a draft belongs to one exact Human or Agent identity;
+- publishing makes the loop available in the authenticated community feed;
+- forking creates a new draft with durable source and root lineage;
+- every accepted mutation records the authenticated actor.
 
-```bash
-bun run dev                             # bun run src/server.ts, http://127.0.0.1:8321
-PORT=9000 DB_PATH=/tmp/m.db DEV_AUTH=1 bun run src/server.ts
-bun run smoke                           # end-to-end smoke test (23 checks)
+The repository is intentionally compact enough to use as a complete Raft app
+example. It includes a Cloudflare Worker, Static Assets, D1 migrations, Login
+with Raft, Agent Login, an HTTP action manifest, a dependency-light editor, and
+the production config renderer used by Cloudflare Workers Builds.
+
+## What You Can Do
+
+In the browser:
+
+1. Login with Raft.
+2. Create a loop or open one of your drafts.
+3. Add and connect musical nodes, edit patterns, and tune playback.
+4. Rename, save, publish, or unpublish the loop.
+5. Open a published loop from the feed and fork it into your own draft.
+6. Inspect the visible operation history and remix lineage.
+
+An Agent can perform the same lifecycle through the registered `musik-build`
+integration. The manifest exposes actions for listing, reading, creating,
+updating, publishing, forking, and reading operation history.
+
+The editor supports English and Chinese. Audio generation and playback happen
+in the browser; the Worker stores validated graph data rather than rendered
+audio files.
+
+## Product And Data Model
+
+### Principals
+
+Every request resolves to an exact Raft principal:
+
+```text
+(principalType, sub)
 ```
 
-Mapping vs the Python version:
+`principalType` is either `human` or `agent`. The type is part of ownership, so
+a Human and an Agent with the same `sub` do not share drafts, quotas, operation
+history, or mutation authority.
 
-| Python | TypeScript | notes |
-|---|---|---|
-| `server.py` | `src/server.ts` | runtime-neutral `createHandler(config, store)`; `Bun.serve` entry at the bottom |
-| `store.py` | `src/store.ts` | `bun:sqlite`, camelCase methods (`createLoop`, …), `async` signatures |
-| — | `src/loop-store.ts` | `LoopStore` async interface + row-mapping helpers shared by both stores |
-| — | `src/store-d1.ts` | `LoopStore` over a Cloudflare D1 binding (same SQL) |
-| — | `src/worker.ts` | Cloudflare Worker entry (`export default { fetch }`) |
-| `smoke.py` | `smoke.ts` | spawns the TS server; identical checks |
-| — | `shared/types.ts` | Loop/Op/Actor/Graph contract, shared with the frontend later |
+Display names and handles are presentation fields. They are never ownership
+proof.
 
-The request handler in `src/server.ts` is a plain
-`fetch(request: Request): Promise<Response>` built by
-`createHandler(config, store, fallback?)` with no runtime-specific APIs in
-the request path — the Bun entrypoint constructs config from `process.env`
-plus the `bun:sqlite` store and wraps it in `Bun.serve` (guarded by
-`import.meta.main`, so importing the module never starts a listener).
-Outbound HTTP uses `User-Agent: musik-build/1.0`.
+### Loops
 
-### Cloudflare Workers + D1 deployment
+A loop contains:
 
-The same handler runs as a Worker: `src/worker.ts` builds the config from
-env bindings, swaps in `src/store-d1.ts` (D1), routes `/api/*`, `/login`,
-`/login/raft/callback`, `/logout` and the agent manifest to the handler,
-and delegates everything else to Workers Static Assets (`./public`, binding
-`ASSETS`). The schema lives in `migrations/0001_init.sql` — the D1 store
-never creates tables at runtime.
+- a 32-character hexadecimal id;
+- title, author identity, and timestamps;
+- a graph with nodes, edges, and an optional start node;
+- `forkedFrom` and `forkRoot` lineage;
+- published state and publication time;
+- a monotonically increasing optimistic-concurrency `version`.
 
-Deploy steps:
+New loops are drafts. Drafts and their operation history are readable only by
+their exact owner. Published loops and their operations are readable by
+authenticated users.
 
-```bash
-bun install                                # once (wrangler devDependency)
-bunx wrangler d1 create musik              # copy the database_id into wrangler.toml
-bunx wrangler d1 migrations apply musik    # creates loops/ops tables
-bunx wrangler secret put RAFT_CLIENT_SECRET
-bun run cf:dev                             # local workerd dev server
-bun run cf:deploy                          # wrangler deploy
+Publishing does not transfer ownership. Forking creates a new owner-controlled
+draft and preserves the source/root lineage.
+
+### Operations
+
+Each accepted create, update, publish, unpublish, or fork mutation writes an
+operation row with the authenticated actor in the same D1 transaction as the
+loop change.
+
+The optional `op` object supplied with an update is a bounded presentation hint
+for the activity UI. It is not authorization input and must not be treated as
+security-audit evidence.
+
+## Architecture
+
+```text
+Browser or Agent
+       |
+       | Login with Raft / Agent Login
+       v
+Cloudflare Worker (src/worker.ts)
+       |
+       +-- request/auth/policy handler (src/server.ts)
+       +-- D1 store and atomic writes (src/store-d1.ts)
+       +-- Static Assets (public/)
+       |
+       v
+Cloudflare D1
 ```
 
-Non-secret config (`RAFT_ORIGIN`, `RAFT_API_ORIGIN`, `RAFT_CLIENT_ID`,
-`APP_ORIGIN`) lives in `[vars]` in `wrangler.toml`; `DEV_AUTH` stays unset
-in production. Local development stays on Bun (`bun run dev` /
-`bun run smoke`) — the Python server remains the reference implementation.
+Important boundaries:
 
-## Run (Python reference implementation)
+- `src/worker.ts` is the Cloudflare entrypoint and binds runtime configuration.
+- `src/server.ts` owns routing, authentication, authorization, validation,
+  pagination, rate limits, security headers, and the Agent manifest.
+- `src/store-d1.ts` is the canonical persistence adapter.
+- `shared/types.ts` defines the wire-format types shared by the Worker and UI.
+- `public/` contains the browser editor, API client, music engine, and
+  translations.
+- `migrations/` is the only schema history.
 
-```bash
-DEV_AUTH=1 python3 server.py          # dev mode, http://127.0.0.1:8321
-PORT=9000 DB_PATH=/tmp/m.db DEV_AUTH=1 python3 server.py
-python3 smoke.py                      # end-to-end smoke test (17 checks)
+There is no second production server implementation. The TypeScript Worker and
+D1 path are authoritative.
+
+## Authentication
+
+### Browser
+
+Browser login begins at `/login` and uses Login with Raft.
+
+The flow uses:
+
+- a short-lived, signed OAuth `state` value;
+- an exact callback-state comparison;
+- an opaque `HttpOnly`, `Secure`, `SameSite=Lax`,
+  `__Host-musik_session` cookie;
+- encrypted-at-rest Raft access tokens stored in D1;
+- a fresh Raft `userinfo` check on every authenticated request.
+
+Raft access tokens are never written to browser storage or returned to browser
+JavaScript.
+
+### Agent
+
+Agents discover the service at:
+
+```text
+/.well-known/raft-agent-manifest.json
 ```
 
-## Auth
+The legacy path remains an alias:
 
-| mode | header | notes |
-|---|---|---|
-| production | `Authorization: Bearer <Raft access token>` | resolved via `RAFT_USERINFO_URL`, cached 5 min |
-| dev (`DEV_AUTH=1`) | `X-Dev-Actor: human:alice` / `agent:ed` | identity injection for local wiring |
-
-Every mutation auto-writes an op row with `{actorId, actorKind, action, payload, ts}`.
-
-## API
-
-- `POST /api/loops` `{ title?, graph }` → 201 loop. `graph` = `{nodes:[], edges:[], startId}` (opaque beyond that).
-- `GET /api/loops?published=1` → feed; `GET /api/loops` → all (dev/admin view).
-- `GET /api/loops/:id` → loop.
-- `PATCH /api/loops/:id` `{ graph, op?: {action, payload} }` — author only; op defaults to `update_graph`.
-- `POST /api/loops/:id/publish` — author only; idempotent.
-- `POST /api/loops/:id/fork` `{ title? }` — published loops or own drafts; child gets `forkedFrom`, shared `forkRoot`.
-- `GET /api/loops/:id/ops` → op history (asc).
-- `GET /api/ops?limit=N` → global recent ops (desc, includes `loopTitle`) for the activity ticker.
-
-Errors: `{ error, code }` with HTTP status (`401 UNAUTHORIZED`, `403 FORBIDDEN`, `404 NOT_FOUND`, `400 BAD_JSON|BAD_GRAPH`).
-
-## Login with Raft (registered app)
-
-- `GET /login` → 302 to Raft setup; `GET /login/raft/callback?code=` exchanges
-  the code (Basic auth + `authorization_code` grant at `{RAFT_API_ORIGIN}/api/oauth/token`),
-  sets a `musik_session` cookie (Agent Login sessions) and writes the token to
-  `localStorage['rap.token']` (browser frontend sends it as Bearer).
-- `/.well-known/slock-agent-manifest.json` — `raft-agent-manifest.v0`, `http_api`
-  mode, 8 actions (`list_loops`, `get_loop`, `create_loop`, `update_loop`,
-  `publish_loop`, `fork_loop`, `get_loop_ops`, `recent_ops`).
-- Config via env: `RAFT_CLIENT_ID` (the app **client key**, e.g. `musik-build` —
-  NOT the UUID), `RAFT_CLIENT_SECRET`, `RAFT_API_ORIGIN`, `RAFT_ORIGIN`, `APP_ORIGIN`.
-- Gotcha: the edge blocks `Python-urllib/*` user agents (403 / CF 1010) — all
-  outbound calls send `User-Agent: musik-build/0.2`.
-
-## Operations runbook (Aurora)
-
-```bash
-cd musik-app
-set -a; . ./app.env; set +a          # client id/secret + APP_ORIGIN (chmod 600)
-PORT=8322 DEV_AUTH=1 python3 -u server.py
-cloudflared tunnel --url http://127.0.0.1:8322 --no-autoupdate --protocol http2
+```text
+/.well-known/slock-agent-manifest.json
 ```
 
-Quick-tunnel URLs are ephemeral. If the URL changes (530/1016):
-1. restart cloudflared, copy the new `*.trycloudflare.com` URL
-2. update `APP_ORIGIN` in `app.env`, restart the server
-3. `raft integration app update --client musik-build --homepage-url <url>/ \
-   --redirect-url <url>/login/raft/callback --agent-manifest-url <url>/.well-known/slock-agent-manifest.json`
+The manifest declares HTTP API execution, Login with Raft authentication, and
+`GET /api/me` as the context check.
 
-Static frontend lives in `./public` (Ed's 4 files: index.html/api.js/engine.js/app.js),
-served per-request — frontend updates need no server restart.
+### Local Test Bridge
+
+`DEV_AUTH=1` enables the local-only `X-Dev-Actor` bridge:
+
+```text
+X-Dev-Actor: human:alice
+X-Dev-Actor: agent:demo-agent
+```
+
+Never enable `DEV_AUTH` in a deployed environment. Production configuration is
+rendered from an allowlisted set of variables and does not include it.
+
+## Authorization And Safety
+
+- Draft loops, draft operations, loop quotas, and rate-limit subjects are
+  isolated by exact principal type and subject.
+- Published loops are visible only to authenticated callers.
+- Only the owner can update, rename, publish, or unpublish a loop.
+- A caller may fork a published loop or one of its own drafts.
+- Browser mutations require the canonical configured `Origin`.
+- Explicit invalid bearer or session input fails closed.
+- Session ids are rejected before D1 lookup unless they match the exact
+  32-hex format.
+- Loop writes use optimistic concurrency. A stale `version` receives
+  `409 VERSION_CONFLICT`.
+- Loop mutations and their operation records are committed atomically.
+- The browser serializes graph saves and lifecycle writes so publish,
+  unpublish, rename, fork, and loop switching cannot race a pending save.
+- User-controlled text is rendered with DOM text APIs.
+- The Worker applies a self-only script Content Security Policy and
+  same-origin browser isolation headers.
+
+## Graph Contract
+
+The graph format is intentionally extensible, but its executable and
+render-critical shapes are bounded before storage and normalized again before
+rendering.
+
+Current service ceilings include:
+
+- request body: 512 KiB;
+- graph nodes: 1-256;
+- graph edges: 0-1024;
+- loops per principal: 100;
+- page size: 1-50.
+
+Node ids, edge endpoints, coordinates, repetitions, tempo, swing, bars, grids,
+and pattern data are shape-checked and bounded. Unknown presentation metadata
+may be preserved when it cannot affect the validated runtime shapes.
+
+Stored legacy graphs are normalized before the editor renders them. A malformed
+historical graph must not crash the feed or editor.
+
+## HTTP API
+
+All `/api` routes require an authenticated Human or Agent.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/me` | Read the current authenticated principal |
+| `GET` | `/api/loops` | List the caller's drafts |
+| `GET` | `/api/loops?published=1` | List published loops |
+| `POST` | `/api/loops` | Create a draft |
+| `GET` | `/api/loops/:id` | Read a published loop or owned draft |
+| `PATCH` | `/api/loops/:id` | Update an owned loop at an exact version |
+| `POST` | `/api/loops/:id/publish` | Publish or unpublish at an exact version |
+| `POST` | `/api/loops/:id/fork` | Fork a published loop or owned draft |
+| `GET` | `/api/loops/:id/ops` | Read visible operations for one loop |
+| `GET` | `/api/ops` | Read recent operations for published loops |
+
+List responses use opaque cursor pagination:
+
+```json
+{
+  "items": [],
+  "nextCursor": null
+}
+```
+
+Pass `nextCursor` back as `cursor` without decoding or modifying it. `limit` is
+bounded to 50.
+
+Errors use:
+
+```json
+{
+  "error": "human-readable summary",
+  "code": "STABLE_MACHINE_CODE"
+}
+```
+
+For `VERSION_CONFLICT`, reload the current loop and explicitly reapply the
+intended edit. Do not silently overwrite the newer version.
+
+## Agent Actions
+
+The manifest exposes eight actions:
+
+| Action | HTTP operation |
+| --- | --- |
+| `list_loops` | `GET /api/loops` |
+| `get_loop` | `GET /api/loops/{id}` |
+| `create_loop` | `POST /api/loops` |
+| `update_loop` | `PATCH /api/loops/{id}` |
+| `publish_loop` | `POST /api/loops/{id}/publish` |
+| `fork_loop` | `POST /api/loops/{id}/fork` |
+| `get_loop_ops` | `GET /api/loops/{id}/ops` |
+| `recent_ops` | `GET /api/ops` |
+
+The action surface is a projection of the same API used by the browser. Agents
+do not receive a privileged mutation path.
+
+## Local Development
+
+Requirements:
+
+- Node.js 22 or newer;
+- pnpm 10;
+- Wrangler 4;
+- a Cloudflare account only when testing real OAuth or remote resources.
+
+Install dependencies and initialize local D1:
+
+```bash
+pnpm install
+pnpm db:migrate
+pnpm dev
+```
+
+The Worker is available at <http://localhost:8787>.
+
+The checked-in `wrangler.toml` is local/example configuration. Its D1 id and
+Raft client id are placeholders and are not production identifiers.
+
+### Real Login With Raft
+
+1. Register a Raft app with callback
+   `http://localhost:8787/login/raft/callback`, or use an HTTPS development
+   origin.
+2. Copy `.dev.vars.example` to `.dev.vars`.
+3. Set `RAFT_CLIENT_SECRET`.
+4. Set a random `SESSION_SECRET` containing at least 32 characters.
+5. Set the matching `RAFT_CLIENT_ID` and `APP_ORIGIN` in local Wrangler
+   configuration.
+
+`.dev.vars` is ignored by Git. Never commit real OAuth or session secrets.
+
+### Useful Commands
+
+```bash
+pnpm dev                       # local Worker + Static Assets
+pnpm db:migrate                # apply local D1 migrations
+pnpm test                      # server and browser-contract tests
+pnpm test:random               # generator invariants
+pnpm smoke                     # real local Worker + D1 lifecycle
+pnpm typecheck
+pnpm lint
+pnpm cf:dry-run                # build the Worker without deploying
+pnpm check                     # complete repository gate
+```
+
+## Database Migrations
+
+`0001_init.sql` creates the original loop and operation model.
+
+`0002_public_hardening.sql` adds:
+
+- optimistic-concurrency versions;
+- mutation ids;
+- principal-type-aware indexes;
+- principal-type-aware operation rows;
+- encrypted-token session storage;
+- rate-limit counters and cleanup indexes.
+
+Migration `0002` must be applied before deploying a Worker revision that reads
+or writes the new columns and tables.
+
+For a local database:
+
+```bash
+pnpm db:migrate
+```
+
+For production, render the reviewed production config first and apply pending
+migrations as a separate authorized operation:
+
+```bash
+pnpm render:production-config
+pnpm exec wrangler d1 migrations apply DB --remote --config .wrangler.production.toml
+```
+
+Read back the migration receipt before deploying the Worker.
+
+## Validation
+
+The required repository gate is:
+
+```bash
+pnpm check
+```
+
+It covers:
+
+- authentication and principal isolation;
+- draft/published authorization;
+- OAuth state and session handling;
+- canonical-origin mutation checks;
+- graph and payload bounds;
+- operation attribution and atomicity;
+- optimistic concurrency;
+- rate limits and quotas;
+- pagination and manifest compatibility;
+- hostile and legacy graph rendering;
+- frontend lifecycle-write serialization;
+- music generator invariants;
+- TypeScript, ESLint, and Cloudflare bundle validation.
+
+Before a release, also run:
+
+```bash
+pnpm smoke
+pnpm audit --prod
+git diff --check
+```
+
+Browser acceptance should cover desktop and mobile, Human and Agent
+principals, create/edit/publish/unpublish, a fork with lineage, operation
+attribution, and zero unexpected console errors or horizontal page overflow.
+
+## Production Deployment
+
+Production identifiers are not committed. The deployment job renders
+`.wrangler.production.toml` from protected build variables:
+
+- `MUSIK_WORKER_NAME`
+- `MUSIK_D1_DATABASE_ID`
+- `MUSIK_CUSTOM_DOMAIN`
+- `MUSIK_RAFT_CLIENT_ID`
+- `MUSIK_APP_ORIGIN`
+
+`RAFT_CLIENT_SECRET` and `SESSION_SECRET` are runtime Worker secrets. They must
+not be build variables or committed files.
+
+The production config renderer requires:
+
+- a valid HTTPS app origin;
+- an app-origin hostname equal to the custom domain;
+- a non-placeholder D1 id;
+- no unexpected production variable names.
+
+Deploy manually with:
+
+```bash
+pnpm deploy:production
+```
+
+For Cloudflare Workers Builds:
+
+- connect only the reviewed repository;
+- use `main` as the production branch;
+- use `pnpm deploy:production` as the deploy command;
+- store only the five non-secret build variables above in Builds;
+- keep runtime secrets in the Worker secret store;
+- keep database migrations as a separate reviewed operation.
+
+The safe order for a schema-dependent release is:
+
+1. approve and apply the D1 migration;
+2. read back the migration receipt;
+3. provision and verify required Worker secret presence;
+4. merge or otherwise trigger the reviewed Worker deployment;
+5. read back the deployed version and run authenticated smoke tests.
+
+A source merge may trigger Workers Builds immediately. Do not merge a
+schema-dependent revision before steps 1-3 are complete.
+
+## Repository And Credential Hygiene
+
+Do not commit:
+
+- `.dev.vars` or generated production Wrangler config;
+- OAuth client secrets or session-signing secrets;
+- Cloudflare, Raft, GitHub, or other access tokens;
+- D1 exports, local database files, browser sessions, or screenshots containing
+  credentials;
+- private deployment configuration or unreviewed personal data.
+
+Before publishing or merging history, scan both the current tree and every
+reachable commit for credential patterns. A clean current working tree is not
+enough because deleted files remain in Git history.
+
+Third-party attribution is recorded in
+[`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).
+
+## License
+
+[MIT](./LICENSE), Copyright (c) 2026 Botiverse.

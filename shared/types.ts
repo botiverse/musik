@@ -1,6 +1,5 @@
-/** Shared contract types for musik.build — imported by the backend (src/)
- *  and later by the frontend. Field names match the wire format exactly
- *  (camelCase JSON), which mirrors the Python reference implementation.
+/** Shared contract types for musik.build. Field names match the wire format
+ * exactly (camelCase JSON).
  */
 
 export type ActorKind = "human" | "agent";
@@ -15,8 +14,8 @@ export interface Actor {
   picture: string | null;
 }
 
-/** Loop graph. Semantics are opaque to the backend; only the presence of
- *  nodes[] and edges[] arrays is validated. */
+/** Loop graph. The backend bounds node, edge, pattern, coordinate, tempo,
+ * and repetition shapes while preserving extensible presentation metadata. */
 export interface Graph {
   nodes: any[];
   edges: any[];
@@ -37,6 +36,8 @@ export interface Loop {
   forkRoot: string;
   published: boolean;
   publishedAt: string | null;
+  /** Monotonic optimistic-concurrency version. */
+  version: number;
 }
 
 export interface Op {
@@ -55,5 +56,5 @@ export interface Op {
 /** Error body shape for all non-2xx API responses. */
 export interface ApiError {
   error: string;
-  code: string; // UNAUTHORIZED | FORBIDDEN | NOT_FOUND | BAD_JSON | BAD_GRAPH | BAD_REQUEST
+  code: string;
 }
