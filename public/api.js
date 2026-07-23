@@ -1,7 +1,7 @@
 /* ============================================================
    musik.build — API layer
    One interface, two backends:
-   - REAL  : talks to the bun backend at /api/* (Rick's server)
+   - REAL  : talks to the Cloudflare Worker at /api/*
    - MOCK  : localStorage, so the app runs standalone over file://
    The UI never knows which is active. Swap = set a base URL.
    ============================================================ */
@@ -15,13 +15,10 @@ const RAP = {}; // shared namespace across the app's classic scripts
    so you can SEE human vs agent ops land in the same audit log. */
 RAP.actor = { id: 'local:you', kind: 'human', name: 'You' };
 function setActor(a){ RAP.actor = a; localStorage.setItem('rap.actor', JSON.stringify(a)); }
-(function(){ try{ const s=JSON.parse(localStorage.getItem('rap.actor')||'null'); if(s) RAP.actor=s; }catch(e){} })();
 
-/* REAL-mode auth (per Rick): identity is proven by a Raft access token, not
-   self-reported headers. Prod: Authorization: Bearer <token> (human via
-   Login-with-Raft, agent via `raft integration login` session→token).
+/* REAL-mode auth: identity is proven by the app's opaque HttpOnly session or
+   a Raft bearer token supplied by a non-browser API client.
    Dev bridge: backend DEV_AUTH=1 accepts X-Dev-Actor: "<kind>:<name>". */
-RAP.token = null;                       // set by page after Login-with-Raft
 RAP.devActor = null;                     // e.g. "human:alice" / "agent:ed" during local联调
 
 /* action vocabulary — shared with backend audit log */
@@ -41,20 +38,26 @@ const API = (function(){
     base = (location.protocol==='http:'||location.protocol==='https:') ? '/api' : null;
   }
   const MOCK = !base;
+  if(MOCK){
+    try{ const saved=JSON.parse(localStorage.getItem('rap.actor')||'null'); if(saved) RAP.actor=saved; }catch(e){}
+  }
 
   /* ---------------- REAL ---------------- */
   async function req(method, path, body){
     const headers = { 'Content-Type':'application/json' };
-    if(RAP.token) headers['Authorization'] = 'Bearer '+RAP.token;
     // dev bridge: pick up ?dev=agent:ed or window-set devActor when no real token
     const dev = RAP.devActor || new URLSearchParams(location.search).get('dev');
-    if(!RAP.token && dev) headers['X-Dev-Actor'] = dev;
+    if(dev) headers['X-Dev-Actor'] = dev;
     const r = await fetch(base+path, {
-      method, headers,
+      method, headers, credentials:'include',
       body: body!=null ? JSON.stringify(body) : undefined
     });
     if(r.status===401 && window.onAuthExpired) window.onAuthExpired();   // session dropped — surface it, don't fall silent
-    if(!r.ok){ throw new Error('API '+method+' '+path+' → '+r.status); }
+    if(!r.ok){
+      let detail=null; try{ detail=await r.json(); }catch(e){}
+      const error=new Error('API '+method+' '+path+' → '+r.status);
+      error.status=r.status; error.code=detail&&detail.code; throw error;
+    }
     return r.status===204 ? null : r.json();
   }
 
@@ -85,28 +88,31 @@ const API = (function(){
       const rec={ id, title:loop.title||'Untitled', authorId:RAP.actor.id, authorKind:RAP.actor.kind,
         authorName:RAP.actor.name, createdAt:now(), updatedAt:now(), published:false,
         forkedFrom:loop.forkedFrom||null, forkRoot:loop.forkRoot||null,
-        graph:loop.graph };
+        graph:loop.graph, version:1 };
       if(!rec.forkRoot) rec.forkRoot=id;
       d.loops[id]=rec; d.order.push(id);
       logOp(d,id,'create_loop',{title:rec.title, forkedFrom:rec.forkedFrom});
       save(d); return rec;
     },
-    async patchLoop(id, action, payload, graph){
+    async patchLoop(id, action, payload, graph, version){
       const d=db(); const l=d.loops[id]; if(!l) throw new Error('loop 404');
+      if(version!==undefined && version!==l.version) throw new Error('loop 409');
       if(graph!==undefined) l.graph=graph;
-      l.updatedAt=now();
+      l.updatedAt=now(); l.version=(l.version||1)+1;
       logOp(d,id,action,payload);
       save(d); return l;
     },
-    async publish(id, published=true){
+    async publish(id, published=true, version){
       const d=db(); const l=d.loops[id]; if(!l) throw new Error('loop 404');
-      l.published=published; l.updatedAt=now();
+      if(version!==undefined && version!==l.version) throw new Error('loop 409');
+      l.published=published; l.updatedAt=now(); l.version=(l.version||1)+1;
       logOp(d,id,published?'publish':'unpublish',{title:l.title});
       save(d); return l;
     },
-    async renameLoop(id, title){
+    async renameLoop(id, title, version){
       const d=db(); const l=d.loops[id]; if(!l) throw new Error('loop 404');
-      l.title=title; l.updatedAt=now();
+      if(version!==undefined && version!==l.version) throw new Error('loop 409');
+      l.title=title; l.updatedAt=now(); l.version=(l.version||1)+1;
       logOp(d,id,'rename',{title});
       save(d); return l;
     },
@@ -115,7 +121,7 @@ const API = (function(){
       const nid=uid('loop');
       const rec={ id:nid, title:title||(src.title+' (fork)'), authorId:RAP.actor.id, authorKind:RAP.actor.kind,
         authorName:RAP.actor.name, createdAt:now(), updatedAt:now(), published:false,
-        forkedFrom:src.id, forkRoot:src.forkRoot||src.id, graph:JSON.parse(JSON.stringify(src.graph)) };
+        forkedFrom:src.id, forkRoot:src.forkRoot||src.id, graph:JSON.parse(JSON.stringify(src.graph)), version:1 };
       d.loops[nid]=rec; d.order.push(nid);
       // fork op recorded on the child (matches backend: child-side lineage)
       logOp(d,nid,'fork',{from:src.id, fromTitle:src.title, fromAuthor:src.authorName});
@@ -132,25 +138,23 @@ const API = (function(){
 
   /* ---------------- REAL wrappers (same signatures) ---------------- */
   const real = {
-    listLoops:(opts={})=>req('GET','/loops'+(opts.published?'?published=1':'')),
+    listLoops:(opts={})=>req('GET','/loops?limit=50'+(opts.published?'&published=1':'')).then(p=>p.items),
     getLoop:(id)=>req('GET','/loops/'+id),
     createLoop:(loop)=>req('POST','/loops',loop),
-    // PATCH body per Rick: { graph, op:{action,payload} } — backend stores graph
-    // opaque + auto-logs the op. graph omitted when a change carries no new graph.
-    patchLoop:(id,action,payload,graph)=>req('PATCH','/loops/'+id,{graph,op:{action,payload}}),
-    publish:(id,published=true)=>req('POST','/loops/'+id+'/publish',{published}),
-    renameLoop:(id,title)=>req('PATCH','/loops/'+id,{title}),   // backend auto-logs a rename op
+    patchLoop:(id,action,payload,graph,version)=>req('PATCH','/loops/'+id,{graph,version,op:{action,payload}}),
+    publish:(id,published=true,version)=>req('POST','/loops/'+id+'/publish',{published,version}),
+    renameLoop:(id,title,version)=>req('PATCH','/loops/'+id,{title,version}),
     fork:(id,title)=>req('POST','/loops/'+id+'/fork',{title}),
-    getOps:(id)=>req('GET','/loops/'+id+'/ops'),
+    getOps:(id)=>req('GET','/loops/'+id+'/ops?limit=50').then(p=>p.items),
     // optional global activity ticker; degrades to empty if backend lacks it
-    recentOps:(limit=40)=>req('GET','/ops?limit='+limit).catch(()=>[]),
+    recentOps:(limit=40)=>req('GET','/ops?limit='+Math.min(limit,50)).then(p=>p.items).catch(()=>[]),
     me:()=>req('GET','/me')
   };
 
   function stripGraphForList(l){
     return { id:l.id, title:l.title, authorId:l.authorId, authorName:l.authorName, authorKind:l.authorKind,
       createdAt:l.createdAt, updatedAt:l.updatedAt, published:l.published,
-      forkedFrom:l.forkedFrom, forkRoot:l.forkRoot, graph:l.graph };
+      forkedFrom:l.forkedFrom, forkRoot:l.forkRoot, graph:l.graph, version:l.version||1 };
   }
 
   const impl = MOCK ? mock : real;

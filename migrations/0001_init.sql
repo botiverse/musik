@@ -1,5 +1,5 @@
--- musik.build D1 schema — identical to the SCHEMA constant in src/store.ts
--- (and store.py). Applied via `wrangler d1 migrations apply musik`.
+-- musik.build initial D1 schema.
+-- Apply through Wrangler's migration command for the DB binding.
 
 CREATE TABLE IF NOT EXISTS loops (
   id           TEXT PRIMARY KEY,

@@ -187,6 +187,10 @@
     background:var(--drum);color:#2b0410;font-weight:800;padding:10px 16px;border-bottom:3px solid #7c1226;font-size:13px}
   .sessionBar.show{display:flex}
   .sessionBar button{padding:6px 14px}
+  .loginGate{grid-column:1/-1;text-align:center;padding:72px 20px}
+  .loginLogo{font-size:28px}
+  .loginBlurb{color:var(--dim);font-size:13px;margin:16px 0 26px}
+  .loginButton{font-size:15px;padding:12px 26px}
 </style>
 </head>
 <body>
@@ -276,7 +280,7 @@
   <div class="cards" id="cards"></div>
 </section>
 
-<footer data-i18n="footer" data-i18n-html></footer>
+<footer data-i18n="footer"></footer>
 
 <div class="sessionBar" id="sessionBar">
   <span data-i18n="session.expired">Session expired — please sign in again</span>
@@ -284,9 +288,6 @@
 </div>
 <div class="toast" id="toast"></div>
 
-<script>
-  function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2400); }
-</script>
 <script src="i18next.min.js"></script>
 <script src="i18n.js"></script>
 <script src="api.js"></script>

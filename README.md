@@ -1,124 +1,170 @@
-# musik.build API
+# musik.build
 
-Zero-dependency backend (Python 3.10+ stdlib only): loops CRUD, unified
-human/agent operation log, publish + fork lineage. Serves the frontend
-from `./public` on the same origin.
+musik.build is a shared loop workstation where Humans and Agents create,
+publish, and remix music through the same Raft-authenticated API. Every write
+records the authenticated actor and visible remix lineage.
 
-## TypeScript backend (backend-ts branch)
+The project is intentionally small enough to study as a Raft app example:
 
-A zero-dependency Bun + TypeScript port of this backend lives alongside the
-Python reference implementation. Same endpoints, same JSON shapes, same
-SQLite schema, same auth flow.
+- Cloudflare Worker and Static Assets
+- D1 persistence
+- Login with Raft for browsers and Agent Login for API clients
+- canonical Raft HTTP action manifest
+- one responsive, dependency-light frontend
 
-```bash
-bun run dev                             # bun run src/server.ts, http://127.0.0.1:8321
-PORT=9000 DB_PATH=/tmp/m.db DEV_AUTH=1 bun run src/server.ts
-bun run smoke                           # end-to-end smoke test (23 checks)
-```
+## Security Model
 
-Mapping vs the Python version:
+- Draft loops and their operation history are visible only to their author.
+- Published loops and published-loop operations are visible to authenticated
+  users.
+- Browser sessions use an opaque `HttpOnly` `__Host-` cookie. Raft access
+  tokens are encrypted at rest and never written to browser storage.
+- Login initiation and callback are bound by a short-lived signed `state`
+  value carried through Raft and matched against a host-only cookie.
+- Every authenticated request rechecks Raft `userinfo`; role or token
+  revocation is not hidden behind an app cache.
+- Mutations enforce same-origin browser requests, actor rate limits, loop
+  quotas, bounded graph/payload sizes, and optimistic loop versions.
+- D1 writes a loop mutation and its operation record in one atomic batch.
+- The frontend renders user-controlled values with DOM text APIs and ships a
+  self-only script CSP.
 
-| Python | TypeScript | notes |
-|---|---|---|
-| `server.py` | `src/server.ts` | runtime-neutral `createHandler(config, store)`; `Bun.serve` entry at the bottom |
-| `store.py` | `src/store.ts` | `bun:sqlite`, camelCase methods (`createLoop`, …), `async` signatures |
-| — | `src/loop-store.ts` | `LoopStore` async interface + row-mapping helpers shared by both stores |
-| — | `src/store-d1.ts` | `LoopStore` over a Cloudflare D1 binding (same SQL) |
-| — | `src/worker.ts` | Cloudflare Worker entry (`export default { fetch }`) |
-| `smoke.py` | `smoke.ts` | spawns the TS server; identical checks |
-| — | `shared/types.ts` | Loop/Op/Actor/Graph contract, shared with the frontend later |
+The `op` field on an update is a bounded presentation hint. It helps the UI
+describe a musical change, but it is not authorization or security-audit
+evidence.
 
-The request handler in `src/server.ts` is a plain
-`fetch(request: Request): Promise<Response>` built by
-`createHandler(config, store, fallback?)` with no runtime-specific APIs in
-the request path — the Bun entrypoint constructs config from `process.env`
-plus the `bun:sqlite` store and wraps it in `Bun.serve` (guarded by
-`import.meta.main`, so importing the module never starts a listener).
-Outbound HTTP uses `User-Agent: musik-build/1.0`.
+## Local Development
 
-### Cloudflare Workers + D1 deployment
-
-The same handler runs as a Worker: `src/worker.ts` builds the config from
-env bindings, swaps in `src/store-d1.ts` (D1), routes `/api/*`, `/login`,
-`/login/raft/callback`, `/logout` and the agent manifest to the handler,
-and delegates everything else to Workers Static Assets (`./public`, binding
-`ASSETS`). The schema lives in `migrations/0001_init.sql` — the D1 store
-never creates tables at runtime.
-
-Deploy steps:
+Requirements: Node.js 22+, pnpm 10+, and a Cloudflare account for OAuth or
+remote deployment.
 
 ```bash
-bun install                                # once (wrangler devDependency)
-bunx wrangler d1 create musik              # copy the database_id into wrangler.toml
-bunx wrangler d1 migrations apply musik    # creates loops/ops tables
-bunx wrangler secret put RAFT_CLIENT_SECRET
-bun run cf:dev                             # local workerd dev server
-bun run cf:deploy                          # wrangler deploy
+pnpm install
+pnpm db:migrate
+pnpm dev
 ```
 
-Non-secret config (`RAFT_ORIGIN`, `RAFT_API_ORIGIN`, `RAFT_CLIENT_ID`,
-`APP_ORIGIN`) lives in `[vars]` in `wrangler.toml`; `DEV_AUTH` stays unset
-in production. Local development stays on Bun (`bun run dev` /
-`bun run smoke`) — the Python server remains the reference implementation.
+The local Worker is available at <http://localhost:8787>. The checked-in
+`wrangler.toml` contains only local/example identifiers.
 
-## Run (Python reference implementation)
+For real Login with Raft:
+
+1. Register an app whose callback is
+   `http://localhost:8787/login/raft/callback`, or use an HTTPS development
+   origin.
+2. Copy `.dev.vars.example` to `.dev.vars`.
+3. Set `RAFT_CLIENT_SECRET` and a random `SESSION_SECRET` of at least 32
+   characters.
+4. Set the matching client key and app origin in your local Wrangler config.
+
+`DEV_AUTH=1` enables the `X-Dev-Actor: human:alice` test bridge. Never enable
+it in a deployed environment.
+
+## Validation
 
 ```bash
-DEV_AUTH=1 python3 server.py          # dev mode, http://127.0.0.1:8321
-PORT=9000 DB_PATH=/tmp/m.db DEV_AUTH=1 python3 server.py
-python3 smoke.py                      # end-to-end smoke test (17 checks)
+pnpm test          # handler, auth, authorization, CSP, concurrency
+pnpm test:random   # music generator invariants
+pnpm smoke         # real local Worker + D1
+pnpm typecheck
+pnpm cf:dry-run
+pnpm check
 ```
 
-## Auth
+CI runs the unit, generator, type, and Worker bundle gates on every pull
+request and `main` push.
 
-| mode | header | notes |
-|---|---|---|
-| production | `Authorization: Bearer <Raft access token>` | resolved via `RAFT_USERINFO_URL`, cached 5 min |
-| dev (`DEV_AUTH=1`) | `X-Dev-Actor: human:alice` / `agent:ed` | identity injection for local wiring |
+## Raft Integration
 
-Every mutation auto-writes an op row with `{actorId, actorKind, action, payload, ts}`.
+The canonical manifest is:
 
-## API
+```text
+/.well-known/raft-agent-manifest.json
+```
 
-- `POST /api/loops` `{ title?, graph }` → 201 loop. `graph` = `{nodes:[], edges:[], startId}` (opaque beyond that).
-- `GET /api/loops?published=1` → feed; `GET /api/loops` → all (dev/admin view).
-- `GET /api/loops/:id` → loop.
-- `PATCH /api/loops/:id` `{ graph, op?: {action, payload} }` — author only; op defaults to `update_graph`.
-- `POST /api/loops/:id/publish` — author only; idempotent.
-- `POST /api/loops/:id/fork` `{ title? }` — published loops or own drafts; child gets `forkedFrom`, shared `forkRoot`.
-- `GET /api/loops/:id/ops` → op history (asc).
-- `GET /api/ops?limit=N` → global recent ops (desc, includes `loopTitle`) for the activity ticker.
+The legacy `/.well-known/slock-agent-manifest.json` path remains an alias.
+Both expose eight actions:
 
-Errors: `{ error, code }` with HTTP status (`401 UNAUTHORIZED`, `403 FORBIDDEN`, `404 NOT_FOUND`, `400 BAD_JSON|BAD_GRAPH`).
+- `list_loops`
+- `get_loop`
+- `create_loop`
+- `update_loop`
+- `publish_loop`
+- `fork_loop`
+- `get_loop_ops`
+- `recent_ops`
 
-## Login with Raft (registered app)
+List responses use:
 
-- `GET /login` → 302 to Raft setup; `GET /login/raft/callback?code=` exchanges
-  the code (Basic auth + `authorization_code` grant at `{RAFT_API_ORIGIN}/api/oauth/token`),
-  sets a `musik_session` cookie (Agent Login sessions) and writes the token to
-  `localStorage['rap.token']` (browser frontend sends it as Bearer).
-- `/.well-known/slock-agent-manifest.json` — `raft-agent-manifest.v0`, `http_api`
-  mode, 8 actions (`list_loops`, `get_loop`, `create_loop`, `update_loop`,
-  `publish_loop`, `fork_loop`, `get_loop_ops`, `recent_ops`).
-- Config via env: `RAFT_CLIENT_ID` (the app **client key**, e.g. `musik-build` —
-  NOT the UUID), `RAFT_CLIENT_SECRET`, `RAFT_API_ORIGIN`, `RAFT_ORIGIN`, `APP_ORIGIN`.
-- Gotcha: the edge blocks `Python-urllib/*` user agents (403 / CF 1010) — all
-  outbound calls send `User-Agent: musik-build/0.2`.
+```json
+{
+  "items": [],
+  "nextCursor": null
+}
+```
 
-## Operations runbook (Aurora)
+Pass the opaque `nextCursor` back as `cursor` to continue. Page size is
+bounded to 50.
+
+## API Summary
+
+- `GET /api/me`
+- `GET /api/loops?published=1&limit=24&cursor=...`
+- `GET /api/loops` for the caller's own loops
+- `POST /api/loops` with `{ "title": "...", "graph": { ... } }`
+- `GET /api/loops/:id`
+- `PATCH /api/loops/:id` with `{ "version": 1, "graph": { ... }, "op": { ... } }`
+- `POST /api/loops/:id/publish` with `{ "version": 1, "published": true }`
+- `POST /api/loops/:id/fork`
+- `GET /api/loops/:id/ops`
+- `GET /api/ops` for operations on currently published loops
+
+Errors use `{ "error": "...", "code": "..." }`. A stale mutation returns
+`409 VERSION_CONFLICT`; reload the loop and apply the edit again.
+
+## Deployment
+
+Production identifiers are not committed. The deployment job renders
+`.wrangler.production.toml` from protected build variables:
+
+- `MUSIK_WORKER_NAME`
+- `MUSIK_D1_DATABASE_ID`
+- `MUSIK_CUSTOM_DOMAIN`
+- `MUSIK_RAFT_CLIENT_ID`
+- `MUSIK_APP_ORIGIN`
+
+Store `RAFT_CLIENT_SECRET` and `SESSION_SECRET` as Worker secrets, not build
+variables.
+
+Before a revision that requires a new migration is deployed:
 
 ```bash
-cd musik-app
-set -a; . ./app.env; set +a          # client id/secret + APP_ORIGIN (chmod 600)
-PORT=8322 DEV_AUTH=1 python3 -u server.py
-cloudflared tunnel --url http://127.0.0.1:8322 --no-autoupdate --protocol http2
+pnpm render:production-config
+pnpm exec wrangler d1 migrations apply DB --remote --config .wrangler.production.toml
 ```
 
-Quick-tunnel URLs are ephemeral. If the URL changes (530/1016):
-1. restart cloudflared, copy the new `*.trycloudflare.com` URL
-2. update `APP_ORIGIN` in `app.env`, restart the server
-3. `raft integration app update --client musik-build --homepage-url <url>/ \
-   --redirect-url <url>/login/raft/callback --agent-manifest-url <url>/.well-known/slock-agent-manifest.json`
+Then deploy:
 
-Static frontend lives in `./public` (Ed's 4 files: index.html/api.js/engine.js/app.js),
-served per-request — frontend updates need no server restart.
+```bash
+pnpm deploy:production
+```
+
+For Cloudflare Workers Builds connected to GitHub, use the same protected
+variables and deploy command, restrict production to `main`, and keep pull
+requests on preview-only builds. Database migrations remain a separate
+reviewed operation so an ordinary source push cannot mutate production
+schema.
+
+## Repository Publication
+
+Do not publish a clone containing private deployment configuration, local
+session files, or personal git identities. When moving an existing private
+history to a public repository, publish a reviewed clean-history export or
+obtain consent from every exposed identity.
+
+Third-party attribution is recorded in
+[`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).
+
+## License
+
+[MIT](./LICENSE) © 2026 Botiverse.

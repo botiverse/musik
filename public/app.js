@@ -9,6 +9,7 @@
 "use strict";
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
+function toast(m){ const el=$('#toast'); el.textContent=m; el.classList.add('show'); setTimeout(()=>el.classList.remove('show'),2400); }
 
 /* ---------- current song ---------- */
 let loop = null;        // API record; loop.graph = {nodes,edges,startId}
@@ -40,23 +41,66 @@ function useLoop(rec){
 function syncAlignUI(){ if(!graph||!graph.master) return;
   $('#alignChk').checked=graph.master.align; $('#alignBpm').disabled=!graph.master.align; $('#alignBpm').value=graph.master.bpm; }
 function normalizeGraph(g){
-  if(g && Array.isArray(g.nodes) && g.nodes.length){
-    g.nodes.forEach(n=>{ ensureShape(n.state); if(n.x==null)n.x=40; if(n.y==null)n.y=40; if(!n.reps)n.reps=2; });
-    if(!Array.isArray(g.edges)) g.edges=[];
-    if(!g.startId || !g.nodes.find(n=>n.id===g.startId)) g.startId=g.nodes[0].id;
-    if(g.counter==null) g.counter=g.nodes.length;
-    if(!g.master) g.master={align:false, bpm:(g.nodes[0].state.bpm)||120};   // per-graph whole-song tempo
-    return g;
+  if(g && typeof g==='object' && !Array.isArray(g) && Array.isArray(g.nodes) && g.nodes.length){
+    const ids=new Set(), nodes=[];
+    g.nodes.slice(0,256).forEach((raw,index)=>{
+      if(!raw || typeof raw!=='object' || Array.isArray(raw)) return;
+      let id=typeof raw.id==='string' && /^[A-Za-z0-9_-]{1,64}$/.test(raw.id) && !ids.has(raw.id)
+        ? raw.id : `legacy_${index+1}`;
+      let suffix=1;
+      while(ids.has(id)) id=`legacy_${index+1}_${suffix++}`;
+      ids.add(id);
+      const n={...raw,id,state:ensureShape(raw.state)};
+      n.x=Number.isFinite(n.x)?Math.max(-100000,Math.min(100000,n.x)):40;
+      n.y=Number.isFinite(n.y)?Math.max(-100000,Math.min(100000,n.y)):40;
+      n.reps=Number.isInteger(n.reps)?Math.max(1,Math.min(64,n.reps)):2;
+      n.ghost=n.ghost===true;
+      nodes.push(n);
+    });
+    if(nodes.length){
+      const edges=(Array.isArray(g.edges)?g.edges:[]).slice(0,1024).filter(e=>
+        e && typeof e==='object' && !Array.isArray(e) &&
+        typeof e.from==='string' && typeof e.to==='string' && ids.has(e.from) && ids.has(e.to));
+      const startId=typeof g.startId==='string' && ids.has(g.startId)?g.startId:nodes[0].id;
+      const counter=Number.isInteger(g.counter) && g.counter>=0 && g.counter<=1000000000
+        ? g.counter : nodes.length;
+      const rawMaster=g.master && typeof g.master==='object' && !Array.isArray(g.master)?g.master:{};
+      const master={...rawMaster,align:rawMaster.align===true};
+      master.bpm=Number.isFinite(rawMaster.bpm)
+        ? Math.max(20,Math.min(400,rawMaster.bpm))
+        : nodes[0].state.bpm;
+      return {...g,nodes,edges,startId,counter,master};
+    }
   }
   // migrate a bare/legacy pattern into a single node
-  const pat = (g && g.grids) ? g : (g && g.nodes && g.nodes[0] && g.nodes[0].state) || starterState();
+  const pat = ensureShape((g && g.grids) ? g : (g && g.nodes && g.nodes[0] && g.nodes[0].state) || starterState());
   return { nodes:[{id:'n1', k:'verse', x:40, y:110, reps:2, state:pat}], edges:[], startId:'n1', counter:1,
            master:{align:false, bpm:(pat.bpm)||120} };
 }
-function ensureShape(s){ if(!s) return;
-  if(!s.grids) s.grids=emptyGrids();
-  SECTIONS.forEach(sec=>{ if(!s.grids[sec.id]) s.grids[sec.id]=Array.from({length:sec.rows},()=>Array(STEPS).fill(false)); });
-  if(!s.bars) s.bars={}; if(s.bpm==null)s.bpm=88; if(s.swing==null)s.swing=.14; if(!s.mood)s.mood='dark';
+function ensureShape(s){
+  if(!s || typeof s!=='object' || Array.isArray(s)) s={};
+  const source=s.grids && typeof s.grids==='object' && !Array.isArray(s.grids)?s.grids:{};
+  const grids={};
+  SECTIONS.forEach(sec=>{
+    const rows=Array.isArray(source[sec.id])?source[sec.id]:[];
+    grids[sec.id]=Array.from({length:sec.rows},(_,r)=>{
+      const row=Array.isArray(rows[r])?rows[r]:[];
+      return Array.from({length:STEPS},(_,c)=>row[c]===true);
+    });
+  });
+  s.grids=grids;
+  const sourceBars=s.bars && typeof s.bars==='object' && !Array.isArray(s.bars)?s.bars:{};
+  s.bars={};
+  Object.entries(sourceBars).slice(0,STEPS).forEach(([step,word])=>{
+    const index=Number(step);
+    if(/^\d{1,2}$/.test(step) && Number.isInteger(index) && index>=0 && index<STEPS && typeof word==='string'){
+      s.bars[index]=word.slice(0,10);
+    }
+  });
+  s.bpm=Number.isFinite(s.bpm)?Math.max(20,Math.min(400,s.bpm)):88;
+  s.swing=Number.isFinite(s.swing)?Math.max(0,Math.min(1,s.swing)):.14;
+  if(s.mood!=='dark'&&s.mood!=='bright') s.mood='dark';
+  return s;
 }
 
 /* select a node → load its pattern into the canvas */
@@ -72,36 +116,57 @@ function selectNode(id, {silent=false}={}){
 }
 
 /* record an op + persist graph. `meaningful=false` for cosmetic moves. */
-async function op(action, payload){
-  try{ await API.patchLoop(loop.id, action, payload, loop.graph); refreshOps(); }
-  catch(e){
-    if(/→ 403/.test(e.message)) toast(t('toast.notYours'));
-    else toast(t('toast.saveFail',{err:e.message}));
-  }
+let mutationQueue=Promise.resolve();
+let dirtyAfterFailedSave=false;
+function enqueueMutation(run){
+  const task=mutationQueue.then(run);
+  mutationQueue=task.catch(()=>{});
+  return task;
 }
+async function persistDirtyCurrentLoop(){
+  if(!dirtyAfterFailedSave || !loop) return;
+  const saved=await API.patchLoop(loop.id,'update_graph',{recovery:true},loop.graph,loop.version);
+  loop.version=saved.version; dirtyAfterFailedSave=false; refreshOps();
+}
+function op(action, payload){
+  const loopId=loop&&loop.id;
+  return enqueueMutation(async()=>{
+    if(!loop || loop.id!==loopId) return;
+    try{ const saved=await API.patchLoop(loop.id, action, payload, loop.graph, loop.version);
+      loop.version=saved.version; dirtyAfterFailedSave=false; refreshOps(); }
+    catch(e){
+      if(e.status===409){ dirtyAfterFailedSave=false; toast(t('toast.saveFail',{err:'version conflict'})); await reloadCurrentLoop(); }
+      if(/→ 403/.test(e.message)) toast(t('toast.notYours'));
+      else if(e.status!==409){ dirtyAfterFailedSave=true; toast(t('toast.saveFail',{err:e.message})); }
+    }
+  });
+}
+async function reloadCurrentLoop(){ if(!loop) return; try{ useLoop(await API.getLoop(loop.id)); }catch(e){} }
 
 /* ================= account menu (handle + logout; demo-switch in mock) ================= */
 function renderActor(){ const a=RAP.actor;
-  $('#actorChip').innerHTML = (a.kind==='agent'?'🤖':'🧑')+' '+a.name;
+  $('#actorChip').textContent = (a.kind==='agent'?'🤖':'🧑')+' '+a.name;
   $('#actorChip').className = 'chip '+(a.kind==='agent'?'agent':'human');
   $('#acctHandle').textContent = '@'+(a.handle||a.name); }
 $('#actorChip').addEventListener('click', e=>{ e.stopPropagation(); $('#acctMenu').classList.toggle('show'); });
 $('#acctMenu').addEventListener('click', e=>e.stopPropagation());
 document.addEventListener('click', ()=>$('#acctMenu').classList.remove('show'));
 $('#logoutBtn').onclick=async()=>{
-  if(!API.MOCK){ try{ await fetch('/logout',{credentials:'include'}); }catch(e){} }
-  localStorage.removeItem(TOKEN_KEY); RAP.token=null;
+  if(!API.MOCK){ try{ await fetch('/logout',{method:'POST',credentials:'include'}); }catch(e){} }
   location.href = location.pathname;   // reload → login gate (live) / fresh (mock)
 };
 
 /* ================= canvas (selected node) ================= */
 const cellEls={}; let phCols=[];
 function buildBoard(){
-  const wrap=$('#sections'); wrap.innerHTML=''; phCols=Array.from({length:STEPS},()=>[]);
+  const wrap=$('#sections'); wrap.replaceChildren(); phCols=Array.from({length:STEPS},()=>[]);
   SECTIONS.forEach(sec=>{
     const div=document.createElement('div'); div.className='section sec-'+sec.id;
-    div.innerHTML=`<div class="secHead"><span class="secName">${sec.name}</span>
-      <span class="secHint">${t('sec.'+sec.id)}</span><button class="mini" data-clearsec="${sec.id}">✕</button></div>`;
+    const head=document.createElement('div'); head.className='secHead';
+    const name=document.createElement('span'); name.className='secName'; name.textContent=sec.name;
+    const hint=document.createElement('span'); hint.className='secHint'; hint.textContent=t('sec.'+sec.id);
+    const clear=document.createElement('button'); clear.className='mini'; clear.dataset.clearsec=sec.id; clear.textContent='✕';
+    head.append(name,hint,clear); div.appendChild(head);
     const grid=document.createElement('div'); grid.className='grid';
     grid.style.gridTemplateColumns=`64px repeat(${STEPS},1fr)`;
     cellEls[sec.id]=[];
@@ -238,11 +303,16 @@ function renderGraph(){
     const nm=document.createElement('div'); nm.className='nname'; nm.textContent=dispName(n); if(!n.ghost) nm.title=t('node.renameHint'); el.appendChild(nm);
     if(n.ghost){
       const gb=document.createElement('div'); gb.className='ghostBtns';
-      gb.innerHTML=`<button data-acc="${n.id}">✓</button><button data-rej="${n.id}">✗</button>`;
+      const accept=document.createElement('button'); accept.dataset.acc=n.id; accept.textContent='✓';
+      const reject=document.createElement('button'); reject.dataset.rej=n.id; reject.textContent='✗';
+      gb.append(accept,reject);
       el.appendChild(gb);
     } else {
       const meta=document.createElement('div'); meta.className='nmeta';
-      meta.innerHTML=`<button data-reps="${n.id}">×${n.reps}</button><button data-play="${n.id}">▶</button><button data-start="${n.id}">🏁</button>`;
+      const reps=document.createElement('button'); reps.dataset.reps=n.id; reps.textContent='×'+n.reps;
+      const play=document.createElement('button'); play.dataset.play=n.id; play.textContent='▶';
+      const start=document.createElement('button'); start.dataset.start=n.id; start.textContent='🏁';
+      meta.append(reps,play,start);
       el.appendChild(meta);
       const port=document.createElement('div'); port.className='port'; port.dataset.port=n.id; el.appendChild(port);
       const x=document.createElement('div'); x.className='nx'; x.dataset.del=n.id; x.textContent='✕'; el.appendChild(x);
@@ -253,19 +323,27 @@ function renderGraph(){
 }
 function renderEdges(){
   const svg=$('#edgeSvg'); const r=gArea.getBoundingClientRect();
-  let defs='<defs><marker id="ah" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0L8,4L0,8z" fill="var(--cable)"/></marker></defs>';
-  let paths='';
+  const ns='http://www.w3.org/2000/svg'; svg.replaceChildren();
+  const defs=document.createElementNS(ns,'defs'); const marker=document.createElementNS(ns,'marker');
+  marker.setAttribute('id','ah'); marker.setAttribute('markerWidth','8'); marker.setAttribute('markerHeight','8');
+  marker.setAttribute('refX','7'); marker.setAttribute('refY','4'); marker.setAttribute('orient','auto');
+  const arrow=document.createElementNS(ns,'path'); arrow.setAttribute('d','M0,0L8,4L0,8z'); arrow.setAttribute('fill','var(--cable)');
+  marker.appendChild(arrow); defs.appendChild(marker); svg.appendChild(defs);
   graph.edges.forEach((e,i)=>{
-    const a=gArea.querySelector(`.gnode[data-id="${e.from}"]`), b=gArea.querySelector(`.gnode[data-id="${e.to}"]`);
+    const a=[...gArea.querySelectorAll('.gnode')].find(el=>el.dataset.id===e.from);
+    const b=[...gArea.querySelectorAll('.gnode')].find(el=>el.dataset.id===e.to);
     if(!a||!b) return;
     const ar=a.getBoundingClientRect(), br=b.getBoundingClientRect();
     const x1=ar.right-r.left, y1=ar.top-r.top+ar.height/2, x2=br.left-r.left, y2=br.top-r.top+br.height/2;
     const mx=(x1+x2)/2; const ghost=nodeById(e.to)?.ghost;
     const d=`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;
-    paths+=`<path d="${d}" fill="none" stroke="${ghost?'rgba(224,159,62,.5)':'var(--cable)'}" stroke-width="2.5" ${ghost?'stroke-dasharray="5 4"':''} marker-end="url(#ah)"/>`;
-    paths+=`<path class="hit" d="${d}" fill="none" stroke="transparent" stroke-width="12" data-edge="${i}"/>`;
+    const path=document.createElementNS(ns,'path'); path.setAttribute('d',d); path.setAttribute('fill','none');
+    path.setAttribute('stroke',ghost?'rgba(224,159,62,.5)':'var(--cable)'); path.setAttribute('stroke-width','2.5');
+    if(ghost) path.setAttribute('stroke-dasharray','5 4'); path.setAttribute('marker-end','url(#ah)'); svg.appendChild(path);
+    const hit=document.createElementNS(ns,'path'); hit.setAttribute('class','hit'); hit.setAttribute('d',d);
+    hit.setAttribute('fill','none'); hit.setAttribute('stroke','transparent'); hit.setAttribute('stroke-width','12');
+    hit.dataset.edge=String(i); svg.appendChild(hit);
   });
-  svg.innerHTML=defs+paths;
 }
 function drawThumb(cv,pat){ const rows=SECTIONS.reduce((a,s)=>a+s.rows,0); cv.width=STEPS; cv.height=rows;
   const ctx=cv.getContext('2d'); ctx.fillStyle='#14120c'; ctx.fillRect(0,0,STEPS,rows);
@@ -370,9 +448,15 @@ function inlineEdit(el, current, opts, commit){
 /* rename the whole track (loop title) — inline edit → backend title PATCH */
 function startLoopTitleEdit(){
   if(!loop) return;
+  const loopId=loop.id;
   inlineEdit($('#songTitle'), loop.title||'', {max:120, cls:'big', multiline:true}, async(v)=>{
-    try{ const rec=await API.renameLoop(loop.id, v); loop.title=(rec&&rec.title)||v;
-      $('#songTitle').textContent=loop.title; refreshOps(); refreshFeed(); }
+    try{ await enqueueMutation(async()=>{
+        if(!loop || loop.id!==loopId) return;
+        await persistDirtyCurrentLoop();
+        const rec=await API.renameLoop(loop.id, v, loop.version);
+        loop.title=(rec&&rec.title)||v; loop.version=rec.version;
+        $('#songTitle').textContent=loop.title; refreshOps(); refreshFeed();
+      }); }
     catch(e){ $('#songTitle').textContent=loop.title;
       if(/→ 403/.test(e.message)) toast(t('toast.notYours')); else toast(t('toast.saveFail',{err:e.message})); }
   });
@@ -451,19 +535,26 @@ function opLine(o){ const who=(o.actorKind==='agent'?'🤖':'🧑')+' '+(o.actor
   return {who, verb, extra, kind:o.actorKind}; }
 async function refreshOps(){ if(!loop) return; let ops=[]; try{ ops=await API.getOps(loop.id); }catch(e){}
   const shown=ops.filter(o=>!HIDDEN_OPS.has(o.action));
-  const box=$('#opList'); box.innerHTML='';
-  if(!shown.length){ box.innerHTML='<div class="empty">'+t('history.empty')+'</div>'; }
+  const box=$('#opList'); box.replaceChildren();
+  if(!shown.length){ const empty=document.createElement('div'); empty.className='empty'; empty.textContent=t('history.empty'); box.appendChild(empty); }
   shown.slice().reverse().forEach(o=>{ const L=opLine(o); const d=document.createElement('div'); d.className='opline '+L.kind;
-    d.innerHTML=`<span class="who">${L.who}</span> ${L.verb}<span class="ex">${L.extra}</span>`; box.appendChild(d); });
+    const who=document.createElement('span'); who.className='who'; who.textContent=L.who;
+    const verb=document.createTextNode(' '+L.verb); const extra=document.createElement('span'); extra.className='ex'; extra.textContent=L.extra;
+    d.append(who,verb,extra); box.appendChild(d); });
   $('#opCount').textContent=shown.length; }
 
 /* ================= song lifecycle ================= */
-async function newSong(){ const rec=await API.createLoop({ title:nextTitle(), graph:freshGraph() });
-  useLoop(rec); toast(t('toast.newSong',{title:rec.title})); refreshMyLoops(); }
+async function newSong(){ try{
+    await enqueueMutation(async()=>{
+      await persistDirtyCurrentLoop();
+      const rec=await API.createLoop({ title:nextTitle(), graph:freshGraph() });
+      useLoop(rec); toast(t('toast.newSong',{title:rec.title})); refreshMyLoops();
+    });
+  }catch(e){ toast(t('toast.saveFail',{err:e.message})); } }
 
 /* ================= loop browser (switch among your own works) ================= */
 async function openLoopMenu(){
-  const menu=$('#loopMenu'); menu.innerHTML='';
+  const menu=$('#loopMenu'); menu.replaceChildren();
   let ls=[]; try{ ls=await API.listLoops(); }catch(e){}
   const mine=ls.filter(l=>l.authorId===RAP.actor.id)
     .sort((a,b)=>String(b.updatedAt).localeCompare(String(a.updatedAt)));
@@ -472,7 +563,10 @@ async function openLoopMenu(){
     const nm=document.createElement('span'); nm.textContent=l.title||'—'; d.appendChild(nm);
     if(l.published){ const dot=document.createElement('span'); dot.className='dot'; dot.textContent='●'; d.appendChild(dot); }
     d.onclick=async()=>{ menu.classList.remove('show'); if(loop && l.id===loop.id) return;
-      try{ const full=await API.getLoop(l.id); useLoop(full); }catch(e){ toast(t('toast.saveFail',{err:e.message})); } };
+      try{ await enqueueMutation(async()=>{
+          await persistDirtyCurrentLoop();
+          const full=await API.getLoop(l.id); useLoop(full);
+        }); }catch(e){ toast(t('toast.saveFail',{err:e.message})); } };
     menu.appendChild(d); });
   if(!mine.length){ const e=document.createElement('div'); e.className='loopItem emptyItem'; e.textContent=t('browser.empty'); menu.appendChild(e); }
   const nw=document.createElement('div'); nw.className='loopItem newItem'; nw.textContent=t('browser.newLoop');
@@ -499,9 +593,15 @@ $('#clearBtn').onclick=()=>{ if(!loop) return; st.grids=emptyGrids(); st.bars={}
 $('#publishBtn').onclick=async()=>{ if(!loop) return;
   const any=graph.nodes.some(n=>SECTIONS.some(s=>n.state.grids[s.id].some(r=>r.some(v=>v))));
   if(!any && !loop.published){ toast(t('toast.emptyCanvas')); return; }
-  const rec=await API.publish(loop.id, !loop.published); loop.published=rec.published;
-  $('#publishBtn').textContent=loop.published?t('board.published'):t('board.publish'); $('#publishBtn').classList.toggle('on',loop.published);
-  toast(loop.published?t('toast.publishOk'):t('toast.unpublishOk')); refreshFeed(); refreshOps(); };
+  const loopId=loop.id;
+  try{ await enqueueMutation(async()=>{
+      if(!loop || loop.id!==loopId) return;
+      await persistDirtyCurrentLoop();
+      const rec=await API.publish(loop.id, !loop.published, loop.version);
+      loop.published=rec.published; loop.version=rec.version;
+      $('#publishBtn').textContent=loop.published?t('board.published'):t('board.publish'); $('#publishBtn').classList.toggle('on',loop.published);
+      toast(loop.published?t('toast.publishOk'):t('toast.unpublishOk')); refreshFeed(); refreshOps();
+    }); }catch(e){ toast(t('toast.saveFail',{err:e.message})); } };
 $('#forkBtn').onclick=async()=>{ if(!loop) return; await doFork(loop.id, loop.title); };
 /* strip stacked flip/fork suffixes so repeated 接力 doesn't pile up
    "X · flip · flip · flip"; a fork keeps the source's base name */
@@ -512,8 +612,14 @@ function baseTitle(title){
   do{ prev=s; s=s.replace(re,'').trim(); }while(s && s!==prev);
   return s||title||'Untitled';
 }
-async function doFork(id, title){ const rec=await API.fork(id, baseTitle(title));
-  rec._forkedTitle=baseTitle(title); useLoop(rec); toast(t('toast.flipOk')); refreshFeed(); refreshMyLoops(); window.scrollTo({top:0,behavior:'smooth'}); }
+async function doFork(id, title){ try{
+    await enqueueMutation(async()=>{
+      await persistDirtyCurrentLoop();
+      const rec=await API.fork(id, baseTitle(title));
+      rec._forkedTitle=baseTitle(title); useLoop(rec); toast(t('toast.flipOk'));
+      refreshFeed(); refreshMyLoops(); window.scrollTo({top:0,behavior:'smooth'});
+    });
+  }catch(e){ toast(t('toast.saveFail',{err:e.message})); } }
 $('#wavBtn').onclick=async()=>{ if(!loop) return; ensureAudio(); toast(t('toast.renderWav'));
   const buf=await renderState(st,2); const a=document.createElement('a'); a.href=URL.createObjectURL(bufToWav(buf)); a.download=(dispName(selNode())||'loop')+'.wav'; a.click(); };
 $('#songWavBtn').onclick=async()=>{ if(!loop) return; ensureAudio(); const seq=buildSong(); if(!seq.length){ toast(t('toast.noSections')); return; }
@@ -522,15 +628,15 @@ $('#songWavBtn').onclick=async()=>{ if(!loop) return; ensureAudio(); const seq=b
 /* ================= Jam Feed ================= */
 let feedAudio=null, feedPlayingId=null;
 async function refreshFeed(){ let ls=[]; try{ ls=await API.listLoops({published:true}); }catch(e){}
-  const wrap=$('#cards'); wrap.innerHTML='';
-  if(!ls.length){ wrap.innerHTML='<div class="empty">'+t('feed.empty')+'</div>'; return; }
+  const wrap=$('#cards'); wrap.replaceChildren();
+  if(!ls.length){ const empty=document.createElement('div'); empty.className='empty'; empty.textContent=t('feed.empty'); wrap.appendChild(empty); return; }
   ls.forEach(item=>{ const g=normalizeGraph(item.graph); const start=g.nodes.find(n=>n.id===g.startId)||g.nodes[0];
     const card=document.createElement('div'); card.className='card';
     const cv=document.createElement('canvas'); drawThumb(cv, start.state); card.appendChild(cv);
     const titleEl=document.createElement('div'); titleEl.className='t'; titleEl.textContent=item.title; card.appendChild(titleEl);
     const meta=document.createElement('div'); meta.className='meta';
-    meta.innerHTML=`${start.state.bpm||88} BPM · ${(item.authorKind==='agent'?'🤖':'🧑')} ${item.authorName||item.authorId}`+
-      (item.forkedFrom?` · <span class="from">${t('feed.flipped')}</span>`:'');
+    meta.appendChild(document.createTextNode(`${start.state.bpm||88} BPM · ${(item.authorKind==='agent'?'🤖':'🧑')} ${item.authorName||item.authorId}`));
+    if(item.forkedFrom){ meta.appendChild(document.createTextNode(' · ')); const from=document.createElement('span'); from.className='from'; from.textContent=t('feed.flipped'); meta.appendChild(from); }
     card.appendChild(meta);
     const nd=document.createElement('div'); nd.className='nodes'; nd.textContent=t('feed.sections',{n:g.nodes.filter(n=>!n.ghost).length}); card.appendChild(nd);
     const btns=document.createElement('div'); btns.className='btns';
@@ -626,22 +732,30 @@ function randomState(){
   return s; }
 
 /* ================= identity (Login-with-Raft) ================= */
-const TOKEN_KEY='rap.token';
 /* token expired mid-session → show a clear re-login bar instead of failing silently */
 window.onAuthExpired = function(){ const b=document.getElementById('sessionBar'); if(b) b.classList.add('show'); };
 async function resolveIdentity(){ if(API.MOCK) return true;
-  const params=new URLSearchParams(location.search); const tok=localStorage.getItem(TOKEN_KEY); if(tok) RAP.token=tok;
+  const params=new URLSearchParams(location.search);
   const devMode=!!(params.get('dev'));
   try{ const me=await API.me();
     RAP.actor={ id:me.id||me.sub||me.actorId, kind:(me.kind||me.type)==='agent'?'agent':'human',
       name:me.name||me.displayName||me.id||me.sub, handle:me.handle||me.username||me.name||me.sub };
     renderActor(); return true;
-  }catch(e){ if(/→ 401/.test(e.message)&&!devMode){ showLogin(); return false; } return true; } }
+  }catch(e){ if(/→ 401/.test(e.message)&&!devMode) showLogin(); else showUnavailable(); return false; } }
 function showLogin(){ const m=document.querySelector('main'); m.style.display='block';
-  m.innerHTML=`<div style="grid-column:1/-1;text-align:center;padding:72px 20px">
-    <div class="logo" style="font-size:28px">musik<b>.build</b></div>
-    <div style="color:var(--dim);font-size:13px;margin:16px 0 26px">${t('login.blurb')}</div>
-    <a href="/login"><button class="primary" style="font-size:15px;padding:12px 26px">${t('login.cta')}</button></a></div>`; }
+  const gate=document.createElement('div'); gate.className='loginGate';
+  const logo=document.createElement('div'); logo.className='logo loginLogo'; logo.appendChild(document.createTextNode('musik'));
+  const bold=document.createElement('b'); bold.textContent='.build'; logo.appendChild(bold);
+  const blurb=document.createElement('div'); blurb.className='loginBlurb'; blurb.textContent=t('login.blurb');
+  const link=document.createElement('a'); link.href='/login'; const button=document.createElement('button');
+  button.className='primary loginButton'; button.textContent=t('login.cta'); link.appendChild(button);
+  gate.append(logo,blurb,link); m.replaceChildren(gate); }
+function showUnavailable(){ const m=document.querySelector('main'); m.style.display='block';
+  const gate=document.createElement('div'); gate.className='loginGate';
+  const blurb=document.createElement('div'); blurb.className='loginBlurb'; blurb.textContent=t('login.unavailable');
+  const button=document.createElement('button'); button.className='primary loginButton';
+  button.textContent=t('login.retry'); button.addEventListener('click',()=>location.reload());
+  gate.append(blurb,button); m.replaceChildren(gate); }
 
 /* ================= boot ================= */
 /* re-render dynamic (t()-driven) content on language switch */
@@ -671,10 +785,10 @@ async function seedIfEmpty(){ const ls=await API.listLoops(); if(ls.length) retu
   setActor({id:'agent:ed',kind:'agent',name:'@Ed'});
   const g=freshGraph(); g.nodes.push({id:'n2',k:'chorus',x:250,y:30,reps:2,state:mutate(g.nodes[0].state,'lift')});
   g.edges.push({from:'n1',to:'n2'}); g.edges.push({from:'n2',to:'n1'}); g.counter=2;
-  const a=await API.createLoop({title:'Concrete Bars', graph:g}); await API.publish(a.id,true);
+  const a=await API.createLoop({title:'Concrete Bars', graph:g}); await API.publish(a.id,true,a.version);
   setActor({id:'human:alice',kind:'human',name:'Alice'});
   const b=await API.fork(a.id,'Concrete Bars'); const bg=normalizeGraph(b.graph); bg.nodes[0].state.bpm=96;
-  await API.patchLoop(b.id,'set_tempo',{node:t('node.verse',{},'en')||'A',bpm:96},b.graph); await API.publish(b.id,true);
+  const updated=await API.patchLoop(b.id,'set_tempo',{node:t('node.verse',{},'en')||'A',bpm:96},b.graph,b.version); await API.publish(b.id,true,updated.version);
   setActor(prev);
 }
 boot();
