@@ -414,6 +414,44 @@ test("static HTML receives a self-only script CSP and security headers", async (
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
 });
 
+test("standalone login and callback errors render complete bilingual pages", async () => {
+  const readyHandler = createHandler(config(), new MemoryStore());
+  const missingCode = await readyHandler(request("/login/raft/callback"));
+  const missingCodeHtml = await missingCode.text();
+  assert.equal(missingCode.status, 400);
+  assert.match(missingCodeHtml, /<section lang="en">/);
+  assert.match(missingCodeHtml, /The Raft callback code is missing/);
+  assert.match(missingCodeHtml, /<section lang="zh-CN">/);
+  assert.match(missingCodeHtml, /缺少 Raft 回调代码/);
+  assert.match(missingCodeHtml, /Return to musik\.build \/ 返回 musik\.build/);
+  assert.doesNotMatch(missingCodeHtml, /<script/i);
+  assert.equal(missingCode.headers.get("cache-control"), "no-store");
+  assert.match(
+    missingCode.headers.get("content-security-policy") ?? "",
+    /script-src 'self'/,
+  );
+
+  const browserAgentCallback = await readyHandler(
+    request("/login/raft/callback?code=agent-request", {
+      headers: { "User-Agent": "Mozilla/5.0" },
+    }),
+  );
+  const browserAgentHtml = await browserAgentCallback.text();
+  assert.equal(browserAgentCallback.status, 403);
+  assert.match(browserAgentHtml, /Complete Agent Login in the client/);
+  assert.match(browserAgentHtml, /请在客户端完成 Agent Login/);
+
+  const unavailableConfig = { ...config(), raftClientSecret: "" };
+  const unavailable = await createHandler(
+    unavailableConfig,
+    new MemoryStore(),
+  )(request("/login"));
+  const unavailableHtml = await unavailable.text();
+  assert.equal(unavailable.status, 503);
+  assert.match(unavailableHtml, /Sign-in is unavailable/);
+  assert.match(unavailableHtml, /暂时无法登录/);
+});
+
 test("login uses canonical Raft setup and an opaque HttpOnly app session", async () => {
   let userinfoCalls = 0;
   const fetchImpl: typeof fetch = async (input, init) => {

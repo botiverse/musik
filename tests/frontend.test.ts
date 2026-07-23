@@ -7,6 +7,13 @@ const api = await readFile(new URL("../public/api.js", import.meta.url), "utf8")
 const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 const i18n = await readFile(new URL("../public/i18n.js", import.meta.url), "utf8");
 
+function leafKeys(value: unknown, prefix = ""): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [prefix];
+  return Object.entries(value).flatMap(([key, child]) =>
+    leafKeys(child, prefix ? `${prefix}.${key}` : key),
+  );
+}
+
 test("user-facing app rendering avoids HTML string sinks", () => {
   assert.doesNotMatch(app + i18n, /\.innerHTML\s*=/);
   assert.doesNotMatch(app + i18n, /insertAdjacentHTML|outerHTML\s*=/);
@@ -20,6 +27,47 @@ test("browser authentication uses cookies rather than browser-readable access to
 
 test("the document has no inline scripts so the self-only CSP can execute", () => {
   assert.doesNotMatch(html, /<script(?:\s[^>]*)?>\s*[^<\s]/i);
+});
+
+test("English and Chinese resources have identical leaf keys", () => {
+  const resources = new Function(`${i18n}\nreturn I18N_RES;`)() as {
+    en: { translation: Record<string, unknown> };
+    zh: { translation: Record<string, unknown> };
+  };
+  assert.deepEqual(
+    leafKeys(resources.en.translation).sort(),
+    leafKeys(resources.zh.translation).sort(),
+  );
+});
+
+test("static and literal dynamic translation keys resolve in both languages", () => {
+  const resources = new Function(`${i18n}\nreturn I18N_RES;`)() as {
+    en: { translation: Record<string, unknown> };
+    zh: { translation: Record<string, unknown> };
+  };
+  const available = new Set(leafKeys(resources.en.translation));
+  const staticKeys = [...html.matchAll(/data-i18n(?:-title)?="([^"]+)"/g)].map(
+    (match) => match[1],
+  );
+  const dynamicKeys = [...app.matchAll(/\bt\(['"]([^'"]+)['"]/g)]
+    .map((match) => match[1])
+    .filter((key) => !key.endsWith("."));
+  for (const key of new Set([...staticKeys, ...dynamicKeys])) {
+    assert.ok(available.has(key), `missing EN/ZH translation key: ${key}`);
+  }
+});
+
+test("language changes cover the document, login gates, mode, and safe errors", () => {
+  assert.match(i18n, /document\.title = t\('app\.title'\)/);
+  assert.match(app, /function renderModeTag\(\)/);
+  assert.match(app, /renderModeTag\(\);\s*if\(!loop\) return/);
+  assert.match(app, /blurb\.dataset\.i18n='login\.blurb'/);
+  assert.match(app, /button\.dataset\.i18n='login\.retry'/);
+  assert.match(app, /function prepareGate\(\)/);
+  assert.match(app, /\$\('#sessionBar'\)\.classList\.remove\('show'\)/);
+  assert.match(app, /function errorText\(error\)/);
+  assert.doesNotMatch(app, /saveFail[^;\n]*e\.message/);
+  assert.doesNotMatch(app, /MOCK · localStorage|LIVE · /);
 });
 
 test("loop lifecycle writes share one queue and recover a failed graph save first", () => {

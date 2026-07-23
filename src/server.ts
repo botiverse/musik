@@ -109,6 +109,103 @@ function sendHtml(status: number, html: string, headers?: HeadersInit): Response
   return withSecurityHeaders(new Response(html, { status, headers: responseHeaders }));
 }
 
+const AUTH_PAGE_COPY = {
+  loginNotConfigured: {
+    enTitle: "Sign-in is unavailable",
+    enBody: "Login with Raft is not configured for musik.build.",
+    zhTitle: "暂时无法登录",
+    zhBody: "musik.build 尚未配置 Login with Raft。",
+  },
+  stateExpired: {
+    enTitle: "Sign-in expired",
+    enBody: "Your sign-in request is missing or expired. Start again from musik.build.",
+    zhTitle: "登录请求已过期",
+    zhBody: "登录请求不存在或已过期，请从 musik.build 重新开始。",
+  },
+  missingCode: {
+    enTitle: "Sign-in could not continue",
+    enBody: "The Raft callback code is missing. Start the sign-in flow again.",
+    zhTitle: "无法继续登录",
+    zhBody: "缺少 Raft 回调代码，请重新发起登录。",
+  },
+  tokenExchangeFailed: {
+    enTitle: "Raft sign-in failed",
+    enBody: "musik.build could not complete the Raft token exchange. Please try again.",
+    zhTitle: "Raft 登录失败",
+    zhBody: "musik.build 无法完成 Raft 令牌交换，请重试。",
+  },
+  userinfoFailed: {
+    enTitle: "Raft identity could not be verified",
+    enBody: "musik.build could not verify the Raft identity. Please try again.",
+    zhTitle: "无法验证 Raft 身份",
+    zhBody: "musik.build 无法验证 Raft 身份，请重试。",
+  },
+  humanRequired: {
+    enTitle: "Human sign-in required",
+    enBody: "Browser sign-in requires a Human Raft identity.",
+    zhTitle: "需要 Human 身份登录",
+    zhBody: "浏览器登录需要 Human 类型的 Raft 身份。",
+  },
+  agentBrowserRejected: {
+    enTitle: "Complete Agent Login in the client",
+    enBody: "This Agent Login callback is for the Raft client and cannot be opened as a browser page.",
+    zhTitle: "请在客户端完成 Agent Login",
+    zhBody: "此 Agent Login 回调由 Raft 客户端处理，不能作为浏览器页面打开。",
+  },
+  agentHandoffFailed: {
+    enTitle: "Agent Login failed",
+    enBody: "musik.build could not complete the Raft Agent Login handoff. Start a fresh Agent Login.",
+    zhTitle: "Agent Login 失败",
+    zhBody: "musik.build 无法完成 Raft Agent Login 交接，请重新发起 Agent Login。",
+  },
+  agentRequired: {
+    enTitle: "Agent identity required",
+    enBody: "Agent Login requires an Agent Raft identity.",
+    zhTitle: "需要 Agent 身份",
+    zhBody: "Agent Login 需要 Agent 类型的 Raft 身份。",
+  },
+} as const;
+
+type AuthPageKind = keyof typeof AUTH_PAGE_COPY;
+
+function sendAuthPage(status: number, kind: AuthPageKind, headers?: HeadersInit): Response {
+  const copy = AUTH_PAGE_COPY[kind];
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${copy.enTitle} / ${copy.zhTitle} — musik.build</title>
+  <style>
+    :root{color-scheme:dark;--bg:#14120c;--panel:#1d1a12;--line:#4d4433;--text:#f2e9d0;--dim:#b8ae94;--accent:#ffb000;--keys:#3fe8a0}
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--text);font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;padding:24px}
+    main{width:min(680px,100%);border:3px solid var(--line);background:var(--panel);padding:clamp(24px,6vw,48px);box-shadow:5px 5px 0 rgba(0,0,0,.55)}
+    .logo{font-size:20px;font-weight:800;letter-spacing:2px;text-transform:uppercase;margin-bottom:32px}.logo b{color:var(--keys)}
+    section+section{border-top:1px solid var(--line);margin-top:24px;padding-top:24px}
+    h1{font-size:clamp(20px,4vw,28px);line-height:1.25;margin:0 0 12px;letter-spacing:0}
+    p{color:var(--dim);line-height:1.65;margin:0}
+    a{display:inline-block;margin-top:32px;background:var(--accent);color:#1b1200;font-weight:800;text-decoration:none;padding:11px 16px;border:2px solid #8f6a10}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="logo" aria-label="musik.build">musik<b>.build</b></div>
+    <section lang="en">
+      <h1>${copy.enTitle}</h1>
+      <p>${copy.enBody}</p>
+    </section>
+    <section lang="zh-CN">
+      <h1>${copy.zhTitle}</h1>
+      <p>${copy.zhBody}</p>
+    </section>
+    <a href="/">Return to musik.build / 返回 musik.build</a>
+  </main>
+</body>
+</html>`;
+  return sendHtml(status, html, headers);
+}
+
 function err(status: number, code: string, message: string): Response {
   return sendJson(status, { error: message, code });
 }
@@ -731,7 +828,7 @@ export function createHandler(
 
   async function login(request: Request): Promise<Response> {
     if (!loginReady()) {
-      return sendHtml(503, "<p>Login is not configured.</p>");
+      return sendAuthPage(503, "loginNotConfigured");
     }
     const state = await createLoginState(config.sessionSecret);
     const headers = new Headers();
@@ -801,7 +898,7 @@ export function createHandler(
   }
 
   async function loginCallback(request: Request, url: URL): Promise<Response> {
-    if (!loginReady()) return sendHtml(503, "<p>Login is not configured.</p>");
+    if (!loginReady()) return sendAuthPage(503, "loginNotConfigured");
     if (!url.searchParams.has("state")) {
       return agentLoginCallback(request, url);
     }
@@ -814,20 +911,20 @@ export function createHandler(
       returnedState !== state ||
       !(await verifyLoginState(state, config.sessionSecret))
     ) {
-      return sendHtml(400, "<p>Login state is missing or expired. Start again from musik.build.</p>", headers);
+      return sendAuthPage(400, "stateExpired", headers);
     }
     const code = url.searchParams.get("code") ?? "";
-    if (!code) return sendHtml(400, "<p>Missing Raft callback code.</p>", headers);
+    if (!code) return sendAuthPage(400, "missingCode", headers);
     const exchanged = await exchangeLoginCode(code);
     if (!exchanged.ok) {
-      return sendHtml(502, "<p>Raft token exchange failed.</p>", headers);
+      return sendAuthPage(502, "tokenExchangeFailed", headers);
     }
     const actor = await fetchUserinfo(exchanged.accessToken);
     if (!actor) {
-      return sendHtml(502, "<p>Raft userinfo failed.</p>", headers);
+      return sendAuthPage(502, "userinfoFailed", headers);
     }
     if (actor.kind !== "human") {
-      return sendHtml(403, "<p>Browser login requires a Human Raft identity.</p>", headers);
+      return sendAuthPage(403, "humanRequired", headers);
     }
     const sessionId = await createLoginSession(exchanged.accessToken, exchanged.maxAge);
     headers.append(
@@ -839,19 +936,19 @@ export function createHandler(
 
   async function agentLoginCallback(request: Request, url: URL): Promise<Response> {
     if (isBrowserNavigation(request)) {
-      return sendHtml(403, "<p>Agent Login callback handoffs are not browser pages.</p>");
+      return sendAuthPage(403, "agentBrowserRejected");
     }
     const code = url.searchParams.get("code") ?? "";
-    if (!code) return sendHtml(400, "<p>Missing Raft callback code.</p>");
+    if (!code) return sendAuthPage(400, "missingCode");
     const exchanged = await exchangeLoginCode(code);
     if (!exchanged.ok) {
       const status = exchanged.upstreamStatus === 400 ? 409 : 502;
-      return sendHtml(status, "<p>Raft Agent Login handoff failed.</p>");
+      return sendAuthPage(status, "agentHandoffFailed");
     }
     const actor = await fetchUserinfo(exchanged.accessToken);
-    if (!actor) return sendHtml(502, "<p>Raft userinfo failed.</p>");
+    if (!actor) return sendAuthPage(502, "userinfoFailed");
     if (actor.kind !== "agent") {
-      return sendHtml(403, "<p>Agent Login requires an Agent Raft identity.</p>");
+      return sendAuthPage(403, "agentRequired");
     }
     const sessionId = await createLoginSession(exchanged.accessToken, exchanged.maxAge);
     const headers = new Headers();
