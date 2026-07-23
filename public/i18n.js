@@ -7,16 +7,21 @@
 
 const I18N_RES = {
   en: { translation: {
-    app:{ tagline:"Make a loop. Share it. See who picks it up.",
+    app:{ title:"musik.build — loop workstation",
+          tagline:"Make a loop. Share it. See who picks it up.",
           positioning:"Make a loop. Share it. See who picks it up." },
     lang:{ toggle:"中" },
+    mode:{ mock:"MOCK · localStorage", live:"LIVE · {{base}}" },
     account:{ logout:"Log out" },
     session:{ expired:"Session expired — please sign in again", relogin:"Sign in" },
     browser:{ myLoops:"My loops ▾", newLoop:"＋ New loop", empty:"No loops yet" },
     loop:{ renameHint:"Rename this track", renamePrompt:"Rename this track:" },
     transport:{ play:"Play selected section", bpm:"BPM", swing:"Swing", dark:"🌙 Dark", bright:"☀️ Light" },
-    actor:{ switchTitle:"Account", liveLocked:"Identity comes from your sign-in",
+    actor:{ you:"You", switchTitle:"Account", liveLocked:"Identity comes from your sign-in",
             now:"Now acting as {{who}}", switchDemo:"Switch (demo)" },
+    section:{ drums:"DRUMS", k808:"808", keys:"KEYS", bars:"BARS" },
+    drum:{ kick:"Kick", snare:"Snare", clap:"Clap", hat:"Hat", open:"Open" },
+    mood:{ dark:"dark", bright:"bright" },
     graph:{ title:"🧩 Loop Graph", hint:"node = a loop · edge = next section · branch = pick one at random · the whole graph is a song",
             addNode:"＋ Add section", playSong:"▶ Whole song", stopSong:"■ Stop", exportSong:"⬇ Export song",
             align:"Align tempo", alignTitle:"Force all sections to one tempo when playing the whole song",
@@ -41,6 +46,9 @@ const I18N_RES = {
     footer:"musik.build",
     login:{ blurb:"Make a loop. Share it. See who picks it up.", cta:"Login with Raft →",
             unavailable:"musik.build could not reach the service. Your work was not changed.", retry:"Retry" },
+    error:{ versionConflict:"version conflict", unauthorized:"sign-in required", forbidden:"permission denied",
+            notFound:"not found", rateLimited:"too many requests", serviceUnavailable:"service unavailable",
+            requestFailed:"request failed" },
     node:{ verse:"A · Verse", chorus:"B · Chorus", section:"Section {{letter}}", flipSuffix:"flip", wordPrompt:"Write a word/syllable for beat {{n}}:", renamePrompt:"Rename this section:", renameHint:"Double-click to rename" },
     toast:{ newSong:"New song «{{title}}» 🎵", addSection:"Added section «{{name}}» 🧩", pickSection:"Select a section first",
             emptyCanvas:"It's empty — draw something first", variantsAdded:"Added two variants — preview them, then keep ✓ or erase ✗ on the graph", publishOk:"Published to Jam Feed 🌊", unpublishOk:"Removed from the feed",
@@ -63,16 +71,21 @@ const I18N_RES = {
          set_tempo:"changed tempo", set_mood:"changed mood", write_bar:"wrote words", clear:"cleared the canvas", rename:"renamed", set_align:"set whole-song tempo" }
   }},
   zh: { translation: {
-    app:{ tagline:"做一段，分享出去，看谁接力。",
+    app:{ title:"musik.build — 音乐循环工作台",
+          tagline:"做一段，分享出去，看谁接力。",
           positioning:"做一段，分享出去，看谁接力。" },
     lang:{ toggle:"EN" },
+    mode:{ mock:"模拟 · 本地存储", live:"在线 · {{base}}" },
     account:{ logout:"退出登录" },
     session:{ expired:"会话已过期，请重新登录", relogin:"重新登录" },
     browser:{ myLoops:"我的作品 ▾", newLoop:"＋ 新作品", empty:"还没有作品" },
     loop:{ renameHint:"给作品改名", renamePrompt:"给作品改个名字：" },
     transport:{ play:"播放选中段落", bpm:"BPM", swing:"Swing", dark:"🌙 暗", bright:"☀️ 亮" },
-    actor:{ switchTitle:"账号", liveLocked:"身份由你的登录决定",
+    actor:{ you:"你", switchTitle:"账号", liveLocked:"身份由你的登录决定",
             now:"现在以 {{who}} 身份操作", switchDemo:"切换身份（演示）" },
+    section:{ drums:"鼓组", k808:"808", keys:"键盘", bars:"人声" },
+    drum:{ kick:"底鼓", snare:"军鼓", clap:"拍手", hat:"闭镲", open:"开镲" },
+    mood:{ dark:"暗色", bright:"明亮" },
     graph:{ title:"🧩 Loop Graph", hint:"节点=一段 loop · 连线=下一段 · 分叉=每次随机走一条 · 整张图是一首歌",
             addNode:"＋ 加段落", playSong:"▶ 整首", stopSong:"■ 停止", exportSong:"⬇ 整首导出",
             align:"统一速度", alignTitle:"播放整首时把所有段落强制到同一速度",
@@ -95,8 +108,11 @@ const I18N_RES = {
            empty:"还没有发布的作品 —— 做一首然后点发布 🌊",
            preview:"▶ 试听", stop:"■", flip:"↪ 接力", sections:"🧩 {{n}} 段", flipped:"↪ 接力作品" },
     footer:"musik.build",
-    login:{ blurb:"做一段，分享出去，看谁接力。", cta:"Login with Raft →",
+    login:{ blurb:"做一段，分享出去，看谁接力。", cta:"使用 Raft 登录 →",
             unavailable:"musik.build 暂时无法连接服务，你的作品没有被修改。", retry:"重试" },
+    error:{ versionConflict:"版本冲突", unauthorized:"需要重新登录", forbidden:"没有操作权限",
+            notFound:"未找到", rateLimited:"请求过于频繁", serviceUnavailable:"服务暂时不可用",
+            requestFailed:"请求失败" },
     node:{ verse:"A · 主歌", chorus:"B · 副歌", section:"段落 {{letter}}", flipSuffix:"接力版", wordPrompt:"给第 {{n}} 拍写一个词/音节：", renamePrompt:"给这段改个名字：", renameHint:"双击改名" },
     toast:{ newSong:"新建「{{title}}」🎵", addSection:"加了段落「{{name}}」🧩", pickSection:"先选一个段落",
             emptyCanvas:"还是空的 —— 先画点东西", variantsAdded:"接了两个变体——试听后在图上 ✓ 收下或 ✗ 擦掉", publishOk:"已发布到 Jam Feed 🌊", unpublishOk:"已从 Feed 撤下",
@@ -140,6 +156,7 @@ function applyI18n(root){
     el.setAttribute('title', t(el.getAttribute('data-i18n-title')));
   });
   document.documentElement.lang = i18next.language==='zh'?'zh-CN':'en';
+  document.title = t('app.title');
 }
 
 async function initI18n(){

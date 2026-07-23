@@ -10,6 +10,26 @@
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 function toast(m){ const el=$('#toast'); el.textContent=m; el.classList.add('show'); setTimeout(()=>el.classList.remove('show'),2400); }
+function errorText(error){
+  const byCode={
+    VERSION_CONFLICT:'error.versionConflict',
+    UNAUTHORIZED:'error.unauthorized',
+    FORBIDDEN:'error.forbidden',
+    NOT_FOUND:'error.notFound',
+    RATE_LIMITED:'error.rateLimited'
+  };
+  const key=byCode[error&&error.code]
+    || (error&&error.status===409?'error.versionConflict':null)
+    || (error&&error.status===401?'error.unauthorized':null)
+    || (error&&error.status===403?'error.forbidden':null)
+    || (error&&error.status===404?'error.notFound':null)
+    || (error&&error.status===429?'error.rateLimited':null)
+    || (error&&error.status>=500?'error.serviceUnavailable':'error.requestFailed');
+  return t(key);
+}
+function renderModeTag(){
+  $('#modeTag').textContent=API.MOCK?t('mode.mock'):t('mode.live',{base:API.base});
+}
 
 /* ---------- current song ---------- */
 let loop = null;        // API record; loop.graph = {nodes,edges,startId}
@@ -135,9 +155,9 @@ function op(action, payload){
     try{ const saved=await API.patchLoop(loop.id, action, payload, loop.graph, loop.version);
       loop.version=saved.version; dirtyAfterFailedSave=false; refreshOps(); }
     catch(e){
-      if(e.status===409){ dirtyAfterFailedSave=false; toast(t('toast.saveFail',{err:'version conflict'})); await reloadCurrentLoop(); }
-      if(/→ 403/.test(e.message)) toast(t('toast.notYours'));
-      else if(e.status!==409){ dirtyAfterFailedSave=true; toast(t('toast.saveFail',{err:e.message})); }
+      if(e.status===409){ dirtyAfterFailedSave=false; toast(t('toast.saveFail',{err:errorText(e)})); await reloadCurrentLoop(); }
+      if(e.status===403) toast(t('toast.notYours'));
+      else if(e.status!==409){ dirtyAfterFailedSave=true; toast(t('toast.saveFail',{err:errorText(e)})); }
     }
   });
 }
@@ -145,7 +165,8 @@ async function reloadCurrentLoop(){ if(!loop) return; try{ useLoop(await API.get
 
 /* ================= account menu (handle + logout; demo-switch in mock) ================= */
 function renderActor(){ const a=RAP.actor;
-  $('#actorChip').textContent = (a.kind==='agent'?'🤖':'🧑')+' '+a.name;
+  const name=a.id==='local:you'?t('actor.you'):a.name;
+  $('#actorChip').textContent = (a.kind==='agent'?'🤖':'🧑')+' '+name;
   $('#actorChip').className = 'chip '+(a.kind==='agent'?'agent':'human');
   $('#acctHandle').textContent = '@'+(a.handle||a.name); }
 $('#actorChip').addEventListener('click', e=>{ e.stopPropagation(); $('#acctMenu').classList.toggle('show'); });
@@ -163,7 +184,7 @@ function buildBoard(){
   SECTIONS.forEach(sec=>{
     const div=document.createElement('div'); div.className='section sec-'+sec.id;
     const head=document.createElement('div'); head.className='secHead';
-    const name=document.createElement('span'); name.className='secName'; name.textContent=sec.name;
+    const name=document.createElement('span'); name.className='secName'; name.textContent=t('section.'+sec.id);
     const hint=document.createElement('span'); hint.className='secHint'; hint.textContent=t('sec.'+sec.id);
     const clear=document.createElement('button'); clear.className='mini'; clear.dataset.clearsec=sec.id; clear.textContent='✕';
     head.append(name,hint,clear); div.appendChild(head);
@@ -172,7 +193,7 @@ function buildBoard(){
     cellEls[sec.id]=[];
     for(let row=0;row<sec.rows;row++){
       const lab=document.createElement('div'); lab.className='rowLabel';
-      lab.textContent = sec.type==='drum'? sec.labels[row] : sec.type==='bars'? t('sec.word') : nName(rowToNote(sec,row));
+      lab.textContent = sec.type==='drum'? t('drum.'+sec.labels[row].toLowerCase()) : sec.type==='bars'? t('sec.word') : nName(rowToNote(sec,row));
       grid.appendChild(lab); cellEls[sec.id][row]=[];
       for(let c=0;c<STEPS;c++){
         const cell=document.createElement('div'); cell.className='cell'+(c%4===0?' q':'');
@@ -458,7 +479,7 @@ function startLoopTitleEdit(){
         $('#songTitle').textContent=loop.title; refreshOps(); refreshFeed();
       }); }
     catch(e){ $('#songTitle').textContent=loop.title;
-      if(/→ 403/.test(e.message)) toast(t('toast.notYours')); else toast(t('toast.saveFail',{err:e.message})); }
+      if(e.status===403) toast(t('toast.notYours')); else toast(t('toast.saveFail',{err:errorText(e)})); }
   });
 }
 $('#renameLoopBtn').onclick=startLoopTitleEdit;
@@ -527,9 +548,9 @@ const HIDDEN_OPS = new Set(['move','update_graph']);
 function opLine(o){ const who=(o.actorKind==='agent'?'🤖':'🧑')+' '+(o.actorName||o.actorId);
   const verb=t('op.'+o.action, {defaultValue:o.action}); let extra='';
   if(o.payload){ const p=o.payload;
-    if(p.node) extra=' · '+p.node; if(p.section) extra+=' / '+p.section.toUpperCase();
+    if(p.node) extra=' · '+p.node; if(p.section) extra+=' / '+t('section.'+p.section,{defaultValue:p.section});
     if(p.agent) extra+=' ('+p.agent+')'; if(p.via) extra+=' ('+p.via+')';
-    if(p.mood) extra+=' · '+p.mood; if(p.word) extra+=' · "'+p.word+'"';
+    if(p.mood) extra+=' · '+t('mood.'+p.mood,{defaultValue:p.mood}); if(p.word) extra+=' · "'+p.word+'"';
     if(p.to&&p.from) extra=' · '+p.from+'→'+p.to; if(p.fromTitle) extra=' · '+p.fromTitle;
     if(p.variants) extra+=' · '+p.variants.join('/'); }
   return {who, verb, extra, kind:o.actorKind}; }
@@ -550,7 +571,7 @@ async function newSong(){ try{
       const rec=await API.createLoop({ title:nextTitle(), graph:freshGraph() });
       useLoop(rec); toast(t('toast.newSong',{title:rec.title})); refreshMyLoops();
     });
-  }catch(e){ toast(t('toast.saveFail',{err:e.message})); } }
+  }catch(e){ toast(t('toast.saveFail',{err:errorText(e)})); } }
 
 /* ================= loop browser (switch among your own works) ================= */
 async function openLoopMenu(){
@@ -566,7 +587,7 @@ async function openLoopMenu(){
       try{ await enqueueMutation(async()=>{
           await persistDirtyCurrentLoop();
           const full=await API.getLoop(l.id); useLoop(full);
-        }); }catch(e){ toast(t('toast.saveFail',{err:e.message})); } };
+        }); }catch(e){ toast(t('toast.saveFail',{err:errorText(e)})); } };
     menu.appendChild(d); });
   if(!mine.length){ const e=document.createElement('div'); e.className='loopItem emptyItem'; e.textContent=t('browser.empty'); menu.appendChild(e); }
   const nw=document.createElement('div'); nw.className='loopItem newItem'; nw.textContent=t('browser.newLoop');
@@ -601,7 +622,7 @@ $('#publishBtn').onclick=async()=>{ if(!loop) return;
       loop.published=rec.published; loop.version=rec.version;
       $('#publishBtn').textContent=loop.published?t('board.published'):t('board.publish'); $('#publishBtn').classList.toggle('on',loop.published);
       toast(loop.published?t('toast.publishOk'):t('toast.unpublishOk')); refreshFeed(); refreshOps();
-    }); }catch(e){ toast(t('toast.saveFail',{err:e.message})); } };
+    }); }catch(e){ toast(t('toast.saveFail',{err:errorText(e)})); } };
 $('#forkBtn').onclick=async()=>{ if(!loop) return; await doFork(loop.id, loop.title); };
 /* strip stacked flip/fork suffixes so repeated 接力 doesn't pile up
    "X · flip · flip · flip"; a fork keeps the source's base name */
@@ -619,7 +640,7 @@ async function doFork(id, title){ try{
       rec._forkedTitle=baseTitle(title); useLoop(rec); toast(t('toast.flipOk'));
       refreshFeed(); refreshMyLoops(); window.scrollTo({top:0,behavior:'smooth'});
     });
-  }catch(e){ toast(t('toast.saveFail',{err:e.message})); } }
+  }catch(e){ toast(t('toast.saveFail',{err:errorText(e)})); } }
 $('#wavBtn').onclick=async()=>{ if(!loop) return; ensureAudio(); toast(t('toast.renderWav'));
   const buf=await renderState(st,2); const a=document.createElement('a'); a.href=URL.createObjectURL(bufToWav(buf)); a.download=(dispName(selNode())||'loop')+'.wav'; a.click(); };
 $('#songWavBtn').onclick=async()=>{ if(!loop) return; ensureAudio(); const seq=buildSong(); if(!seq.length){ toast(t('toast.noSections')); return; }
@@ -741,26 +762,35 @@ async function resolveIdentity(){ if(API.MOCK) return true;
     RAP.actor={ id:me.id||me.sub||me.actorId, kind:(me.kind||me.type)==='agent'?'agent':'human',
       name:me.name||me.displayName||me.id||me.sub, handle:me.handle||me.username||me.name||me.sub };
     renderActor(); return true;
-  }catch(e){ if(/→ 401/.test(e.message)&&!devMode) showLogin(); else showUnavailable(); return false; } }
+  }catch(e){ if(e.status===401&&!devMode) showLogin(); else showUnavailable(); return false; } }
+function prepareGate(){
+  $('#sessionBar').classList.remove('show');
+  $('#modeTag').style.display='none';
+  document.querySelector('.acct').style.display='none';
+  document.querySelector('.feed').style.display='none';
+}
 function showLogin(){ const m=document.querySelector('main'); m.style.display='block';
+  prepareGate();
   const gate=document.createElement('div'); gate.className='loginGate';
   const logo=document.createElement('div'); logo.className='logo loginLogo'; logo.appendChild(document.createTextNode('musik'));
   const bold=document.createElement('b'); bold.textContent='.build'; logo.appendChild(bold);
-  const blurb=document.createElement('div'); blurb.className='loginBlurb'; blurb.textContent=t('login.blurb');
+  const blurb=document.createElement('div'); blurb.className='loginBlurb'; blurb.dataset.i18n='login.blurb'; blurb.textContent=t('login.blurb');
   const link=document.createElement('a'); link.href='/login'; const button=document.createElement('button');
-  button.className='primary loginButton'; button.textContent=t('login.cta'); link.appendChild(button);
+  button.className='primary loginButton'; button.dataset.i18n='login.cta'; button.textContent=t('login.cta'); link.appendChild(button);
   gate.append(logo,blurb,link); m.replaceChildren(gate); }
 function showUnavailable(){ const m=document.querySelector('main'); m.style.display='block';
+  prepareGate();
   const gate=document.createElement('div'); gate.className='loginGate';
-  const blurb=document.createElement('div'); blurb.className='loginBlurb'; blurb.textContent=t('login.unavailable');
+  const blurb=document.createElement('div'); blurb.className='loginBlurb'; blurb.dataset.i18n='login.unavailable'; blurb.textContent=t('login.unavailable');
   const button=document.createElement('button'); button.className='primary loginButton';
-  button.textContent=t('login.retry'); button.addEventListener('click',()=>location.reload());
+  button.dataset.i18n='login.retry'; button.textContent=t('login.retry'); button.addEventListener('click',()=>location.reload());
   gate.append(blurb,button); m.replaceChildren(gate); }
 
 /* ================= boot ================= */
 /* re-render dynamic (t()-driven) content on language switch */
 window.onLangChange = function(){
   renderActor();
+  renderModeTag();
   if(!loop) return;   // login gate: static data-i18n already re-applied
   $('#publishBtn').textContent = loop.published? t('board.published') : t('board.publish');
   selectNode(selId, {silent:true});   // node name + board in new language
@@ -771,7 +801,7 @@ $('#langBtn').addEventListener('click', ()=>{ toggleLang(); });
 async function boot(){
   await initI18n();
   renderActor();
-  $('#modeTag').textContent = API.MOCK ? 'MOCK · localStorage' : ('LIVE · '+API.base);
+  renderModeTag();
   $('#modeTag').className='modetag '+(API.MOCK?'mock':'live');
   if(!(await resolveIdentity())) return;
   if(API.MOCK) await seedIfEmpty();
