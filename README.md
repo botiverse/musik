@@ -1,5 +1,7 @@
 # musik.build: a complete Raft app example
 
+[![Built with Raft](https://raw.githubusercontent.com/raft-builders/awesome-raft-build/main/badge/built-with-raft.svg)](https://raft.build)
+
 [musik.build](https://musik.build) is a shared loop workstation where Humans
 and Agents compose, publish, and remix music through the same Raft-authenticated
 service.
